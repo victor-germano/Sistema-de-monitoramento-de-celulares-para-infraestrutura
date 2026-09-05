@@ -2,6 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
 import type { FastifyInstance } from 'fastify';
+import { eq } from 'drizzle-orm';
+import type * as DbClientModule from '../../src/db/client.ts';
+import type * as UsuariosSchemaModule from '../../src/db/schema/usuarios.ts';
 
 // Mesmo motivo do `health.test.ts`: `env.ts` faz parse eager de
 // `process.env`, então tudo que depende dele (schema, app, session-tokens)
@@ -10,10 +13,13 @@ import type { FastifyInstance } from 'fastify';
 let postgresContainer: StartedPostgreSqlContainer;
 let redisContainer: StartedRedisContainer;
 let app: FastifyInstance;
+let db: typeof DbClientModule.db;
+let usuarios: typeof UsuariosSchemaModule.usuarios;
 
 type Role = 'VIEWER' | 'TECNICO' | 'ADMIN' | 'AUDITOR';
 const TODOS_OS_PAPEIS: readonly Role[] = ['VIEWER', 'TECNICO', 'ADMIN', 'AUDITOR'];
 const tokensPorPapel = new Map<Role, string>();
+const usuarioIdsPorPapel = new Map<Role, string>();
 
 beforeAll(async () => {
   [postgresContainer, redisContainer] = await Promise.all([
@@ -26,8 +32,8 @@ beforeAll(async () => {
   process.env.REDIS_URL = `redis://${redisContainer.getHost()}:${redisContainer.getMappedPort(6379)}`;
 
   const { migrate } = await import('drizzle-orm/postgres-js/migrator');
-  const { db } = await import('../../src/db/client.ts');
-  const { usuarios } = await import('../../src/db/schema/usuarios.ts');
+  ({ db } = await import('../../src/db/client.ts'));
+  ({ usuarios } = await import('../../src/db/schema/usuarios.ts'));
   const { signSessionToken } = await import('../../src/domain/auth/session-tokens.ts');
   const { buildApp } = await import('../../src/app.ts');
 
@@ -49,6 +55,7 @@ beforeAll(async () => {
       .returning();
     if (!usuario) throw new Error(`falha ao semear usuário de teste com papel ${role}`);
 
+    usuarioIdsPorPapel.set(role, usuario.id);
     tokensPorPapel.set(
       role,
       await signSessionToken({ sub: usuario.id, email: usuario.email, role: usuario.role }),
@@ -132,6 +139,43 @@ describe('RBAC — PATCH /usuarios/:id (ADMIN)', () => {
       payload: { role: 'TECNICO' },
     });
     expect(response.statusCode).toBe(404);
+  });
+});
+
+describe('PATCH /usuarios/:id — proteção do último ADMIN (ADR-013)', () => {
+  it('recusa com 422 rebaixar o único ADMIN ativo', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/usuarios/${usuarioIdsPorPapel.get('ADMIN')}`,
+      headers: authHeader('ADMIN'),
+      payload: { role: 'VIEWER' },
+    });
+    expect(response.statusCode).toBe(422);
+  });
+
+  it('permite rebaixar um ADMIN quando existe outro ADMIN ativo', async () => {
+    const [segundoAdmin] = await db
+      .insert(usuarios)
+      .values({
+        oidcSubject: 'oidc-teste-admin-2',
+        email: 'admin2@gruporoveri.com.br',
+        nome: 'Segundo Admin de teste',
+        role: 'ADMIN',
+      })
+      .returning();
+    if (!segundoAdmin) throw new Error('falha ao semear o segundo ADMIN de teste');
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/usuarios/${segundoAdmin.id}`,
+      headers: authHeader('ADMIN'),
+      payload: { role: 'VIEWER' },
+    });
+    expect(response.statusCode).toBe(200);
+
+    // Devolve o sistema ao estado anterior (um único ADMIN ativo) pra não
+    // interferir nos outros testes deste arquivo que rodam depois.
+    await db.update(usuarios).set({ role: 'ADMIN' }).where(eq(usuarios.id, segundoAdmin.id));
   });
 });
 

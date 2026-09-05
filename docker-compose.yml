@@ -43,7 +43,9 @@ services:
       # container falha no boot com "unable to determine transport target".
       NODE_ENV: production
     ports:
-      - '3000:3000'
+      # 13000, não 3000 — ver ADR-014 em docs/DECISOES.md (porta 3000
+      # ocupada por outro processo na máquina de desenvolvimento).
+      - '13000:13000'
     depends_on:
       postgres:
         condition: service_healthy

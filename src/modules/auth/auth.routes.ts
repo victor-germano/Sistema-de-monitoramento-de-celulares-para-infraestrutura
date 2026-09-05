@@ -22,6 +22,7 @@ import {
   atualizarUltimoLogin,
   buscarUsuarioPorId,
   buscarUsuarioPorOidcSubject,
+  contarAdminsAtivos,
   listarUsuarios,
   provisionarUsuario,
 } from '../../domain/usuarios/repositorio.ts';
@@ -324,7 +325,30 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       },
     },
     async (request, reply) => {
-      const usuarioAtualizado = await atualizarRole(request.params.id, request.body.role);
+      const alvo = await buscarUsuarioPorId(request.params.id);
+      if (!alvo) {
+        return sendProblem(reply, 404, 'Usuário não encontrado', undefined);
+      }
+
+      // Salvaguarda cirúrgica (pendência registrada em ADR-011): rebaixar o
+      // ÚLTIMO ADMIN ativo deixaria o sistema sem ninguém capaz de gerenciar
+      // usuários/roles — inclusive sem como reverter o próprio rebaixamento.
+      // Só verifica quando a mudança de fato tira o ADMIN de alguém que já é
+      // o único; promover ou manter ADMIN nunca cai aqui.
+      if (
+        alvo.role === 'ADMIN' &&
+        request.body.role !== 'ADMIN' &&
+        (await contarAdminsAtivos()) <= 1
+      ) {
+        return sendProblem(
+          reply,
+          422,
+          'Não é possível remover o último ADMIN',
+          'Promova outro usuário a ADMIN antes de rebaixar este.',
+        );
+      }
+
+      const usuarioAtualizado = await atualizarRole(alvo.id, request.body.role);
       if (!usuarioAtualizado) {
         return sendProblem(reply, 404, 'Usuário não encontrado', undefined);
       }

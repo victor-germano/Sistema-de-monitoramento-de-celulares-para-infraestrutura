@@ -27,7 +27,7 @@ docker compose up -d postgres redis
 npm run dev
 ```
 
-Verificar: `curl http://localhost:3000/health` deve responder `200` com
+Verificar: `curl http://localhost:13000/health` deve responder `200` com
 `{"status":"ok", "checks": {"database":{"status":"up"}, "redis":{"status":"up"}}}`.
 
 ## Variáveis de ambiente
@@ -73,12 +73,12 @@ de código por token — ver "Testes" abaixo):
 1. No [Google Cloud Console](https://console.cloud.google.com/apis/credentials), crie uma
    credencial OAuth 2.0 do tipo "Aplicativo da Web".
 2. Em "URIs de redirecionamento autorizados", adicione exatamente o valor de
-   `OIDC_REDIRECT_URI` (`http://localhost:3000/auth/callback` em dev).
+   `OIDC_REDIRECT_URI` (`http://localhost:13000/auth/callback` em dev).
 3. Copie o Client ID/Secret gerados para `OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET` no `.env`.
 4. Adicione seu próprio e-mail `@gruporoveri.com.br` (ou o domínio configurado em
    `ALLOWED_EMAIL_DOMAINS`) em `BOOTSTRAP_ADMIN_EMAILS`, pra já entrar como `ADMIN` no
    primeiro login em vez de `VIEWER` (ver ADR-012).
-5. Suba a API (`npm run dev`) e acesse `http://localhost:3000/auth/login` no browser.
+5. Suba a API (`npm run dev`) e acesse `http://localhost:13000/auth/login` no browser.
 
 Login bem-sucedido termina redirecionando pra `FRONTEND_URL` com um cookie `mdm_refresh_token`
 (httpOnly) setado — sem frontend ainda, confirme com as ferramentas de dev do browser

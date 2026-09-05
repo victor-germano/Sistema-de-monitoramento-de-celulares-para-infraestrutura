@@ -56,6 +56,9 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 - **ADR-011:** `GET /usuarios` e `PATCH /usuarios/:id` adicionados (gap da seção 10 — sem
   eles a exigência de "elevação de role manual por um ADMIN" da seção 5 seria inatingível).
 - **ADR-012:** bootstrap do primeiro ADMIN via `BOOTSTRAP_ADMIN_EMAILS`.
+- **ADR-013:** proteção contra remover o último ADMIN + revogação em cascata no reuso de
+  refresh token — as duas pendências abaixo, resolvidas.
+- **ADR-014:** porta padrão de desenvolvimento é `13000`, não `3000` (conflito local).
 
 ## Estado atual
 
@@ -89,15 +92,16 @@ de handoff.
 
 ## Pendências conhecidas (bloqueiam fases específicas, não a Fase 2)
 
-| Pendência                                           | Bloqueia                                      | Situação                                                                                                                              |
-| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Nome real da enterprise AMAPI (`enterprises/LC...`) | Teste E2E real contra a AMAPI (Fase 3+)       | Placeholder no `.env.example`; empresa vai confirmar                                                                                  |
-| Nome do tópico/subscription Pub/Sub                 | Handler `ENROLLMENT`/`STATUS_REPORT` (Fase 4) | Arquivado — depende de conversa com equipe de frontend/infra                                                                          |
-| Lista de filiais existentes                         | Seed de dashboards/relatórios (Fase 6)        | Arquivado — mesma conversa acima                                                                                                      |
-| Versão mínima de Android                            | Alerta `SO_OBSOLETO` (Fase 6)                 | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                                                               |
-| Lista fechada de operadoras                         | `linhas.operadora`                            | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral"                                     |
-| Proteção contra remover o último `ADMIN`            | `PATCH /usuarios/:id`                         | Não implementado por decisão de escopo (ADR-011) — decisão explícita do Victor pendente antes da Fase 7                               |
-| Revogação em cascata no reuso de refresh token      | `POST /auth/refresh`                          | Reuso de token já rotacionado hoje só dá 401 nesse token; não revoga a "família" inteira (endurecimento futuro, não pedido pela spec) |
+| Pendência                                           | Bloqueia                                      | Situação                                                                                          |
+| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Nome real da enterprise AMAPI (`enterprises/LC...`) | Teste E2E real contra a AMAPI (Fase 3+)       | Placeholder no `.env.example`; empresa vai confirmar                                              |
+| Nome do tópico/subscription Pub/Sub                 | Handler `ENROLLMENT`/`STATUS_REPORT` (Fase 4) | Arquivado — depende de conversa com equipe de frontend/infra                                      |
+| Lista de filiais existentes                         | Seed de dashboards/relatórios (Fase 6)        | Arquivado — mesma conversa acima                                                                  |
+| Versão mínima de Android                            | Alerta `SO_OBSOLETO` (Fase 6)                 | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                           |
+| Lista fechada de operadoras                         | `linhas.operadora`                            | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral" |
+
+~~Proteção contra remover o último `ADMIN`~~ e ~~revogação em cascata no reuso de refresh
+token~~ — **resolvidas** (ADR-013), a pedido do Victor logo após a Fase 2.
 
 ## Problemas conhecidos
 
@@ -271,3 +275,43 @@ depois de cada mudança estrutural (extensões de import, schema do Fastify cont
 
 **Pendências futuras:** ver tabela "Pendências conhecidas" acima. Antes da Fase 3: confirmar
 `AMAPI_ENTERPRISE_NAME` real com o Victor (ADR-005).
+
+---
+
+### 2026-09-05 — Commits separados, correções pontuais e ajuste de porta
+
+**Solicitação do usuário:** "commite separado no git; resolva os problemas técnicos de forma
+cirúrgica e prática; ajuste a porta 13000 para o início da sessão e validação do teste;
+inicie a fase 3."
+
+**Status:** Concluída (as três primeiras partes; Fase 3 é a entrada seguinte).
+
+**O que foi realizado:**
+
+- Histórico do git reconstruído em dois commits reais e separados: `feat: Fase 1 —
+Fundação` e `feat: Fase 2 — Schema e Auth`, cada um com a árvore de arquivos e o conjunto
+  de dependências exatos daquele momento (não um squash do estado atual).
+- `PATCH /usuarios/:id` agora recusa (422) rebaixar o último `ADMIN` ativo
+  (`contarAdminsAtivos()` em `src/domain/usuarios/repositorio.ts`).
+- `rotacionarRefreshToken` agora distingue token expirado (401 simples) de token já
+  revogado/rotacionado reutilizado (401 + revoga todas as sessões ativas do usuário — sinal
+  de token roubado).
+- Porta padrão de dev trocada de 3000 pra 13000 (`.env.example`, `docker-compose.yml`,
+  `Dockerfile`, `README.md`, `docs/SETUP.md`) — 3000 está ocupada por um processo alheio a
+  este projeto na máquina do Victor.
+
+**Arquivos alterados:** `src/domain/usuarios/repositorio.ts`, `src/domain/auth/refresh-tokens.ts`
+(exporta `hashToken` como seam de teste), `src/modules/auth/auth.routes.ts`,
+`test/integration/rbac.test.ts`, `test/integration/refresh-tokens.test.ts`, `.env.example`,
+`docker-compose.yml`, `Dockerfile`, `README.md`, `docs/SETUP.md`, `docs/DECISOES.md`
+(ADR-013, ADR-014), este arquivo.
+
+**Decisões técnicas tomadas:** ADR-013, ADR-014.
+
+**Validação realizada:** `npm run typecheck`/`lint`/`build`/`format:check` limpos; suíte de
+testes revalidada (67 + novos testes das duas correções, todos passando).
+
+**Problemas encontrados:** nenhum novo — as duas "pendências" resolvidas aqui já estavam
+documentadas como tal desde a Fase 2, não foram descobertas agora.
+
+**Pendências futuras:** inalteradas — ver tabela acima.

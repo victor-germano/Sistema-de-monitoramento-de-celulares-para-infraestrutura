@@ -19,8 +19,10 @@ COPY --from=build /app/dist ./dist
 
 # curl não vem no alpine por padrão; wget vem no busybox e já basta pro
 # healthcheck do compose/orquestrador não depender de mais uma lib na imagem.
+# Porta 13000 (não a convencional 3000) — precisa bater com `PORT` no `.env`
+# e com o mapeamento de porta do `docker-compose.yml` (ver ADR-014).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD wget -qO- http://localhost:3000/health || exit 1
+  CMD wget -qO- http://localhost:13000/health || exit 1
 
-EXPOSE 3000
+EXPOSE 13000
 CMD ["node", "dist/server.js"]

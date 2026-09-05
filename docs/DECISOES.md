@@ -283,3 +283,50 @@ e-mail específico.
 considerar limpar a variável (ou deixá-la, já que só afeta _primeiro_ provisionamento —
 reprovisionar não existe, um usuário já criado não é afetado por mudanças nela depois)
 após o primeiro ADMIN real existir no sistema.
+
+---
+
+## ADR-013 — Duas pendências da Fase 2 resolvidas: último ADMIN e reuso de refresh token
+
+**Contexto:** o ADR-011 registrou como pendência "proteção contra remover o último ADMIN" e o
+`PROJECT_MEMORY.md` registrou como pendência "revogação em cascata no reuso de refresh
+token" — ambas descritas como fora de escopo da Fase 2 por decisão deliberada. Pedido do
+Victor: resolver essas duas de forma cirúrgica e prática, sem esperar a Fase 7.
+
+**Decisão 1 — último ADMIN:** `PATCH /usuarios/:id` agora recusa (422) rebaixar um usuário
+`ADMIN` quando ele é o único ADMIN ativo no sistema (`contarAdminsAtivos()` em
+`src/domain/usuarios/repositorio.ts`). Sem transação/lock — é uma checagem simples antes do
+`UPDATE`, proporcional a um painel administrativo de baixo tráfego; uma corrida entre dois
+rebaixamentos simultâneos do "último" ADMIN é um cenário extremo não coberto.
+
+**Decisão 2 — reuso de refresh token:** `rotacionarRefreshToken` (`src/domain/auth/refresh-tokens.ts`)
+agora distingue três casos ao invés de tratar tudo como "token inválido": token nunca existiu
+(401 simples), token só **expirou** normalmente (401 simples, sem cascata — não é sinal de
+nada suspeito) e token **já foi revogado/rotacionado antes** — esse último caso revoga
+**todos** os refresh tokens ativos daquele usuário na mesma transação, derrubando qualquer
+sessão em andamento, inclusive a legítima. Mais simples que rastrear uma "família" de tokens
+por dispositivo/sessão (exigiria coluna nova no schema), mas fecha o cenário real de abuso
+que motivou a pendência.
+
+**Consequência:** as duas linhas correspondentes na tabela de pendências do
+`PROJECT_MEMORY.md` saem de "pendente" pra "resolvida nesta entrada". Testado em
+`test/integration/rbac.test.ts` (último ADMIN) e `test/integration/refresh-tokens.test.ts`
+(cascata).
+
+---
+
+## ADR-014 — Porta padrão de desenvolvimento é 13000, não 3000
+
+**Contexto:** a porta 3000 (host) da máquina de desenvolvimento do Victor está ocupada por
+um processo `node.exe` alheio a este projeto (não iniciado por nenhuma sessão de trabalho
+aqui) — `docker compose up`/`npm run dev` falhavam ao tentar abrir essa porta.
+
+**Decisão:** `PORT=13000` é o novo default em `.env.example` (e, por consequência,
+`ALLOWED_ORIGINS`/`OIDC_REDIRECT_URI` de exemplo, `docker-compose.yml` e o `EXPOSE`/
+`HEALTHCHECK` do `Dockerfile`). Não é uma limitação do projeto — qualquer um pode continuar
+usando `3000` (ou outra porta) sobrescrevendo `PORT` no próprio `.env`; só o valor de exemplo
+versionado mudou, pra funcionar de primeira nesta máquina sem exigir ajuste manual.
+
+**Consequência:** documentação (`README.md`, `docs/SETUP.md`) atualizada pra usar `:13000`
+em todos os exemplos de `curl`/URL. Nada no código lê a porta como valor fixo — tudo vem de
+`env.PORT`, então a mudança é só de configuração/documentação.

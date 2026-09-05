@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../../db/client.ts';
 import { usuarios, type Role } from '../../db/schema/usuarios.ts';
 import { env } from '../../config/env.ts';
@@ -64,6 +64,22 @@ export async function provisionarUsuario(dados: DadosProvisionamento): Promise<U
 
 export async function atualizarUltimoLogin(usuarioId: string): Promise<void> {
   await db.update(usuarios).set({ ultimoLogin: new Date() }).where(eq(usuarios.id, usuarioId));
+}
+
+/**
+ * Pendência registrada em ADR-011/PROJECT_MEMORY, resolvida de forma
+ * cirúrgica: conta quantos ADMIN ativos existem, pra `PATCH /usuarios/:id`
+ * poder recusar rebaixar o último. Não usa transação/lock — é uma
+ * salvaguarda de painel administrativo de baixo tráfego, não um caminho
+ * concorrente crítico; uma corrida entre dois rebaixamentos simultâneos do
+ * "último" ADMIN é um cenário extremo que a spec não pede proteção contra.
+ */
+export async function contarAdminsAtivos(): Promise<number> {
+  const admins = await db
+    .select({ id: usuarios.id })
+    .from(usuarios)
+    .where(and(eq(usuarios.role, 'ADMIN'), eq(usuarios.ativo, true)));
+  return admins.length;
 }
 
 export async function atualizarRole(usuarioId: string, role: Role): Promise<Usuario | undefined> {

@@ -78,4 +78,55 @@ describe('refresh tokens', () => {
       RefreshTokenInvalidoError,
     );
   });
+
+  it('ADR-013: reuso de token já rotacionado revoga TODAS as sessões ativas do usuário', async () => {
+    // Duas "sessões" (ex.: dois dispositivos) pro mesmo usuário.
+    const sessaoA = await criarRefreshToken(usuarioId);
+    const sessaoB = await criarRefreshToken(usuarioId);
+
+    // Sessão A rotaciona normalmente (uso legítimo).
+    const sessaoARotacionada = await rotacionarRefreshToken(sessaoA.token);
+
+    // Alguém tenta reusar o token ANTIGO da sessão A — sinal de roubo.
+    await expect(rotacionarRefreshToken(sessaoA.token)).rejects.toBeInstanceOf(
+      RefreshTokenInvalidoError,
+    );
+
+    // Cascata: até a sessão B (nunca reutilizada, totalmente alheia ao
+    // ataque) e o token NOVO da sessão A (fruto da rotação legítima) devem
+    // ter sido revogados junto — é isso que força login de novo em tudo.
+    await expect(rotacionarRefreshToken(sessaoB.token)).rejects.toBeInstanceOf(
+      RefreshTokenInvalidoError,
+    );
+    await expect(rotacionarRefreshToken(sessaoARotacionada.token)).rejects.toBeInstanceOf(
+      RefreshTokenInvalidoError,
+    );
+  });
+
+  it('token só expirado (nunca revogado) NÃO dispara cascata', async () => {
+    const { db } = await import('../../src/db/client.ts');
+    const { refreshTokens } = await import('../../src/db/schema/refresh-tokens.ts');
+    const { eq } = await import('drizzle-orm');
+    const { hashToken } = await import('../../src/domain/auth/refresh-tokens.ts');
+
+    // Token de uma "outra sessão" que continua válido — usado depois pra
+    // provar que a cascata NÃO alcançou ele.
+    const sessaoIrma = await criarRefreshToken(usuarioId);
+
+    // Simula expiração natural: emite um token normalmente e força
+    // `expiraEm` pro passado direto no banco (localizado pelo hash — é o
+    // único jeito de achar a linha, a tabela nunca guarda o token puro).
+    const tokenExpirado = await criarRefreshToken(usuarioId);
+    await db
+      .update(refreshTokens)
+      .set({ expiraEm: new Date(Date.now() - 1000) })
+      .where(eq(refreshTokens.tokenHash, hashToken(tokenExpirado.token)));
+
+    // Simplesmente expirado: 401, sem afetar a sessão irmã.
+    await expect(rotacionarRefreshToken(tokenExpirado.token)).rejects.toBeInstanceOf(
+      RefreshTokenInvalidoError,
+    );
+    const sessaoIrmaAindaValida = await rotacionarRefreshToken(sessaoIrma.token);
+    expect(sessaoIrmaAindaValida.usuarioId).toBe(usuarioId);
+  });
 });

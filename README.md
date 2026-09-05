@@ -28,7 +28,7 @@ npm install
 docker compose up -d postgres redis
 
 npm run dev        # API em modo watch, fora de container
-curl http://localhost:3000/health
+curl http://localhost:13000/health
 ```
 
 Pra rodar migrations e aplicar o schema (Fase 2):
