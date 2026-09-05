@@ -54,6 +54,14 @@ export const envSchema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET precisa de pelo menos 32 caracteres'),
   JWT_SESSION_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   REFRESH_TOKEN_TTL_HOURS: z.coerce.number().int().positive().default(8),
+
+  // --- Android Management API (Fase 3) ---------------------------------
+  // `enterprises/LC...` — placeholder até a empresa confirmar (ADR-005).
+  // Mesmo sendo placeholder, o formato precisa ser válido pra código que
+  // monta nomes de recurso (`${AMAPI_ENTERPRISE_NAME}/policies/...`) não
+  // quebrar por string vazia.
+  AMAPI_ENTERPRISE_NAME: z.string().regex(/^enterprises\/.+/, 'formato esperado: enterprises/<id>'),
+  AMAPI_SERVICE_ACCOUNT_KEY_PATH: z.string().min(1),
 });
 
 function splitList(value: string): string[] {

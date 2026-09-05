@@ -15,6 +15,8 @@ describe('envSchema', () => {
     FRONTEND_URL: 'http://localhost:5173',
     ALLOWED_EMAIL_DOMAINS: 'gruporoveri.com.br',
     JWT_SECRET: 'segredo-de-teste-com-pelo-menos-32-caracteres',
+    AMAPI_ENTERPRISE_NAME: 'enterprises/LC00000000000000000',
+    AMAPI_SERVICE_ACCOUNT_KEY_PATH: './secrets/amapi-service-account.json',
   };
 
   it('aceita a configuração mínima válida e aplica os defaults', () => {
@@ -98,6 +100,11 @@ describe('envSchema', () => {
     if (result.success) {
       expect(result.data.BOOTSTRAP_ADMIN_EMAILS).toEqual([]);
     }
+  });
+
+  it('rejeita AMAPI_ENTERPRISE_NAME fora do formato enterprises/<id>', () => {
+    const result = envSchema.safeParse({ ...base, AMAPI_ENTERPRISE_NAME: 'LC00000000000000000' });
+    expect(result.success).toBe(false);
   });
 
   it('aplica defaults de JWT_SESSION_TTL_MINUTES e REFRESH_TOKEN_TTL_HOURS', () => {

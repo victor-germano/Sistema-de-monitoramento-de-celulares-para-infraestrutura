@@ -22,3 +22,8 @@ process.env.OIDC_REDIRECT_URI ??= 'http://localhost:3000/auth/callback';
 process.env.FRONTEND_URL ??= 'http://localhost:5173';
 process.env.ALLOWED_EMAIL_DOMAINS ??= 'gruporoveri.com.br';
 process.env.JWT_SECRET ??= 'test-jwt-secret-com-pelo-menos-32-caracteres';
+
+// Fase 3 — idem: nenhum teste chama a AMAPI de verdade (sem credenciais
+// reais neste ambiente, ver ADR-005); a fronteira de rede é sempre mockada.
+process.env.AMAPI_ENTERPRISE_NAME ??= 'enterprises/LC00000000000000000';
+process.env.AMAPI_SERVICE_ACCOUNT_KEY_PATH ??= './test/fixtures/amapi-service-account.json';

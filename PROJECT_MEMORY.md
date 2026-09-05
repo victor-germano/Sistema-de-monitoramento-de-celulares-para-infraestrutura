@@ -25,9 +25,10 @@ documentação em `docs/` (entregue completa na Fase 7).
 ## Requisito invariante do produto
 
 Nenhum app distribuído pelo sistema pode ser desinstalado pelo usuário do device — garantido
-por código (`enforceInvariants`, obrigatório antes de todo `policies.patch`), não por
-disciplina do admin. Detalhe completo na spec original (seção 3); implementação chega na
-Fase 3.
+por código (`enforceInvariants`, `src/domain/policy/policy-invariants.ts`), não por
+disciplina do admin. **Implementado na Fase 3, 100% de cobertura de teste.** O mecanismo real
+é `uninstallAppsDisabled: true` a nível de política — não o campo por-app `uninstallBlocked`
+que a spec original cita, que não existe no schema atual da AMAPI (ver ADR-015).
 
 ## Decisões técnicas tomadas
 
@@ -59,10 +60,15 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 - **ADR-013:** proteção contra remover o último ADMIN + revogação em cascata no reuso de
   refresh token — as duas pendências abaixo, resolvidas.
 - **ADR-014:** porta padrão de desenvolvimento é `13000`, não `3000` (conflito local).
+- **ADR-015:** `uninstallBlocked` não existe no schema atual da AMAPI —
+  `uninstallAppsDisabled` (nível de política) é o mecanismo real; o campo por-app é mantido
+  mesmo assim, defensivamente, por pedido do Victor.
+- **ADR-016:** valores em aberto no seed das políticas padrão (`maximumTimeToLock`, lista de
+  apps por perfil) — decisões nossas/pendências de negócio, não pedidas pela spec.
 
 ## Estado atual
 
-**Fase 2 — Schema e Auth: concluída.**
+**Fase 3 — Adapter AMAPI + Invariantes: concluída.**
 
 O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente abaixo):
 
@@ -83,43 +89,63 @@ O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente 
 - **Gestão de usuário/role:** `GET /usuarios`, `PATCH /usuarios/:id` (ADR-011, gap da spec).
 - **Auditoria:** `src/domain/auditoria/registrar.ts`, usado em todo login/logout/rotação de
   role — sempre na mesma transação da ação quando a ação é transacional.
-- 67 testes (unitários + integração com Testcontainers reais), cobertura 92,9%
-  statements/lines, 100% em `src/plugins/rbac.ts` (meta da seção 14 cumprida).
+- 133 testes (unitários + integração com Testcontainers reais), cobertura 94,7%
+  statements/lines, 97,2% functions, 88,1% branches, 100% em `src/plugins/rbac.ts` **e**
+  `src/domain/policy/policy-invariants.ts` (as duas metas de 100% da seção 14 cumpridas).
 
-Ainda não existe (por fase futura): adapter AMAPI, `enforceInvariants`, consumer Pub/Sub,
-comandos, políticas (CRUD), colaboradores/linhas (CRUD), alertas, dashboards, documentação
-de handoff.
+**Fase 3 — Adapter AMAPI + Invariantes**, adicionado a tudo acima:
 
-## Pendências conhecidas (bloqueiam fases específicas, não a Fase 2)
+- **`enforceInvariants`** (`src/domain/policy/policy-invariants.ts`) — o invariante de apps
+  não-removíveis da seção 3, com correção técnica real (ADR-015): força
+  `uninstallAppsDisabled: true` a nível de política (mecanismo que de fato existe e funciona
+  na AMAPI atual) + `uninstallBlocked: true` por app (defensivo, campo não confirmado no
+  schema). Valida `installType` por app. 100% de cobertura, 17 testes incluindo bypass e
+  rollback de versão antiga.
+- **Adapter AMAPI completo** (`src/integrations/amapi/`): `client.ts` (singleton
+  autenticado), `policies.ts` (get/list/delete/patch — patch sempre via `enforceInvariants`),
+  `devices.ts` (get/list/patch de política/delete-como-wipe), `commands.ts`
+  (LOCK/REBOOT/RESET_PASSWORD/RELINQUISH_OWNERSHIP/CLEAR_APP_DATA + wipe),
+  `enrollment.ts` (criação de token com `additionalData`/`oneTimeOnly`/
+  `allowPersonalUsage`), `mappers.ts` (formatação de duração por campo, ADR-002),
+  `retry.ts` (backoff exponencial + jitter, 429/5xx, máx. 5 tentativas — 4xx que não seja 429
+  nunca retry). Nenhum controller importa `googleapis` direto.
+- **Fila serializada de escrita de política** (`src/queues/policy-write-queue.ts`, BullMQ,
+  concorrência 1) — testado de verdade que nunca processa dois jobs em paralelo.
+- **Seed das duas políticas padrão** (`npm run db:seed`,
+  `src/db/seed/politicas-padrao.ts`) — idempotente, valores em aberto documentados (ADR-016).
 
-| Pendência                                           | Bloqueia                                      | Situação                                                                                          |
-| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Nome real da enterprise AMAPI (`enterprises/LC...`) | Teste E2E real contra a AMAPI (Fase 3+)       | Placeholder no `.env.example`; empresa vai confirmar                                              |
-| Nome do tópico/subscription Pub/Sub                 | Handler `ENROLLMENT`/`STATUS_REPORT` (Fase 4) | Arquivado — depende de conversa com equipe de frontend/infra                                      |
-| Lista de filiais existentes                         | Seed de dashboards/relatórios (Fase 6)        | Arquivado — mesma conversa acima                                                                  |
-| Versão mínima de Android                            | Alerta `SO_OBSOLETO` (Fase 6)                 | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                           |
-| Lista fechada de operadoras                         | `linhas.operadora`                            | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral" |
+Ainda não existe (por fase futura): consumer Pub/Sub, rotas HTTP de comandos/políticas/
+colaboradores/linhas (a fila e o adapter existem como biblioteca interna, sem rota ainda),
+alertas, dashboards, documentação de handoff. `client.ts` da AMAPI nunca foi exercitado
+contra a AMAPI real (sem enterprise real — ADR-005); testado mockando a fronteira de rede.
 
-~~Proteção contra remover o último `ADMIN`~~ e ~~revogação em cascata no reuso de refresh
-token~~ — **resolvidas** (ADR-013), a pedido do Victor logo após a Fase 2.
+## Pendências conhecidas (bloqueiam fases específicas, não a Fase 3)
+
+| Pendência                                                                                  | Bloqueia                                      | Situação                                                                                          |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Nome real da enterprise AMAPI (`enterprises/LC...`)                                        | Teste E2E real contra a AMAPI                 | Placeholder no `.env.example`; empresa vai confirmar                                              |
+| Nome do tópico/subscription Pub/Sub                                                        | Handler `ENROLLMENT`/`STATUS_REPORT` (Fase 4) | Arquivado — depende de conversa com equipe de frontend/infra                                      |
+| Lista de filiais existentes                                                                | Seed de dashboards/relatórios (Fase 6)        | Arquivado — mesma conversa acima                                                                  |
+| Versão mínima de Android                                                                   | Alerta `SO_OBSOLETO` (Fase 6)                 | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                           |
+| Lista fechada de operadoras                                                                | `linhas.operadora`                            | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral" |
+| Diferenciação entre políticas `administrativo`/`operacao-campo` e lista de apps por perfil | CRUD de políticas (Fase 5)                    | Seed nasce com payload idêntico nas duas — ADR-016, decisão de negócio pendente                   |
 
 ## Problemas conhecidos
 
-Nenhum em aberto. Um problema foi encontrado e corrigido durante a validação da Fase 2 — ver
-ADR-008: a abordagem literal da spec (`REVOKE UPDATE, DELETE` pro usuário da aplicação) não
-bloqueia nada quando essa role também é dona da tabela (é o caso deste projeto — uma única
-`DATABASE_URL` pra tudo). Substituído/reforçado por um trigger, testado contra Postgres real.
+Nenhum em aberto. Um foi corrigido durante a Fase 2 (ADR-008, `REVOKE` não bloqueia dono da
+tabela) e outro durante a Fase 3: a spec pedia um campo (`uninstallBlocked` por app) que não
+existe na AMAPI atual — corrigido usando o mecanismo real (`uninstallAppsDisabled` a nível de
+política), confirmado contra a documentação oficial do Google antes de implementar (ADR-015).
 
 ## Próximo passo
 
-Fase 3 — Adapter AMAPI + invariantes: módulos de `src/integrations/amapi/`,
-`enforceInvariants` com testes exaustivos (100% de cobertura, meta da seção 14), retry com
-backoff exponencial, fila BullMQ serializada de escrita de política, seed das duas políticas
-padrão (`administrativo`, `operacao-campo`). **Aguardando OK do Victor para começar.**
+Fase 4 — Inventário e Pub/Sub: consumer completo (`src/workers/pubsub-consumer.ts`),
+`eventos_brutos`, handlers `ENROLLMENT` e `STATUS_REPORT`, endpoints de devices e apps,
+replay, reconciliação full. **Aguardando OK do Victor para começar.**
 
-Antes de começar a Fase 3, vale confirmar com o Victor: nome real da `AMAPI_ENTERPRISE_NAME`
-(hoje placeholder — ver ADR-005), já que sem ele o teste E2E real da Fase 3 fica bloqueado
-(fixtures/mocks cobrem o resto).
+Antes de começar a Fase 4, vale resolver com o Victor: nome do tópico/subscription Pub/Sub
+(hoje arquivado — ver ADR-005), sem o qual o handler `ENROLLMENT`/`STATUS_REPORT` fica
+limitado a testes com evento sintético, sem uma subscription real pra consumir.
 
 ---
 
@@ -315,3 +341,64 @@ testes revalidada (67 + novos testes das duas correções, todos passando).
 documentadas como tal desde a Fase 2, não foram descobertas agora.
 
 **Pendências futuras:** inalteradas — ver tabela acima.
+
+---
+
+### 2026-09-05 — Fase 3: Adapter AMAPI + Invariantes
+
+**Solicitação original:** "inicie a fase 3" (na mesma mensagem que pediu os commits
+separados e as correções pontuais acima).
+
+**Status:** Concluída.
+
+**O que foi realizado:**
+
+- `enforceInvariants` (seção 3) — com uma correção técnica real descoberta e confirmada
+  ANTES de implementar (não depois): `uninstallBlocked` por app não existe no schema atual da
+  AMAPI (conferido no cliente oficial `googleapis` e na documentação REST do Google). O
+  mecanismo real é `uninstallAppsDisabled` a nível de política. Perguntei ao Victor antes de
+  decidir sozinho; ele pediu pra manter os dois campos (o real + o defensivo). Ver ADR-015.
+- Adapter AMAPI completo: `client.ts`, `policies.ts`, `devices.ts`, `commands.ts`,
+  `enrollment.ts`, `mappers.ts`, `retry.ts` — todos em `src/integrations/amapi/`.
+- Fila BullMQ serializada (`src/queues/policy-write-queue.ts`), concorrência 1, testada de
+  verdade contra Redis real via Testcontainers.
+- Seed das duas políticas padrão, idempotente.
+
+**Arquivos criados:** `src/domain/policy/policy-invariants.ts`;
+`src/integrations/amapi/{client,policies,devices,commands,enrollment,mappers,retry}.ts`;
+`src/queues/policy-write-queue.ts`; `src/db/seed/politicas-padrao.ts`;
+`test/unit/{policy-invariants,amapi-client,amapi-policies,amapi-devices,amapi-commands,amapi-enrollment,amapi-retry}.test.ts`;
+`test/integration/{policy-write-queue,seed-politicas-padrao}.test.ts`.
+
+**Arquivos alterados:** `src/config/env.ts` (`AMAPI_ENTERPRISE_NAME`,
+`AMAPI_SERVICE_ACCOUNT_KEY_PATH` — agora validados e consumidos de verdade), `.env.example`,
+`vitest.config.ts` (threshold 100% em `policy-invariants.ts`), `package.json`
+(`googleapis`, `bullmq`, script `db:seed`), `docs/DECISOES.md` (ADR-015, ADR-016).
+
+**Arquivos removidos:** nenhum.
+
+**Funcionalidades afetadas:** nenhuma das Fases 1/2 — só adição.
+
+**Decisões técnicas tomadas:** ADR-015 (uninstallBlocked não existe, decisão confirmada com
+o Victor), ADR-016 (valores em aberto no seed).
+
+**Impacto da alteração:** nenhuma regressão — Fases 1/2 revalidadas junto de cada rodada de
+testes desta fase.
+
+**Validação realizada:**
+
+- `npm run typecheck`/`lint`/`build`/`format:check` — limpos.
+- `npm test` — 133/133 passando.
+- `npm run test:coverage` — 94,7% statements/lines, 97,2% functions, 88,1% branches; 100% em
+  `src/plugins/rbac.ts` **e** `src/domain/policy/policy-invariants.ts` (as duas metas
+  explícitas de 100% da seção 14).
+- Achei e corrigi 3 bugs reais nos meus PRÓPRIOS testes durante a validação (mocks
+  compartilhados sem reset entre `it()`, comparação de token puro contra hash armazenado) —
+  documentado aqui porque é exatamente o tipo de coisa que "só rodar os testes e ver verde"
+  não pega sozinho; peguei porque assumi valores calculados errados e conferi manualmente.
+
+**Problemas encontrados:** um — ver ADR-015 (`uninstallBlocked` não existe na AMAPI atual).
+Achado ANTES de implementar (não depois), consultando a documentação oficial do Google.
+
+**Pendências futuras:** ver tabela "Pendências conhecidas" acima. Antes da Fase 4: tópico/
+subscription Pub/Sub (ADR-005).

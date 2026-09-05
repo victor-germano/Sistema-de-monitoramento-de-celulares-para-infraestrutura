@@ -330,3 +330,65 @@ versionado mudou, pra funcionar de primeira nesta máquina sem exigir ajuste man
 **Consequência:** documentação (`README.md`, `docs/SETUP.md`) atualizada pra usar `:13000`
 em todos os exemplos de `curl`/URL. Nada no código lê a porta como valor fixo — tudo vem de
 `env.PORT`, então a mudança é só de configuração/documentação.
+
+---
+
+## ADR-015 — `uninstallBlocked` não existe no schema atual da AMAPI; `uninstallAppsDisabled` é o mecanismo real
+
+**Contexto:** a seção 3 exige que "todo item de `policy.applications` receba
+`uninstallBlocked: true`, sem exceção". Antes de implementar `enforceInvariants`, inspecionei
+o `Schema$ApplicationPolicy` do cliente oficial `googleapis` (v178.0.0, gerado a partir do
+discovery document do Google) — não existe campo `uninstallBlocked` ali. Confirmei contra a
+[documentação REST oficial](https://developers.google.com/android/management/reference/rest/v1/enterprises.policies):
+o mecanismo real é `Policy.uninstallAppsDisabled` (nível de política, não por app), que a
+própria doc do Google descreve como "_prevents apps from being uninstalled, even those
+removed using `applications`_" — ou seja, sozinho já cobre TODOS os apps, sem precisar de
+sinalização por item.
+
+**Decisão (confirmada com o Victor em 2026-09-05):** `enforceInvariants`
+(`src/domain/policy/policy-invariants.ts`) força **os dois**:
+
+1. `uninstallAppsDisabled: true` no nível da política — o mecanismo real, sempre aplicado.
+2. `uninstallBlocked: true` em cada item de `applications[]` — mantido por pedido explícito
+   do Victor, como campo defensivo. Como o campo não existe no schema documentado, escrevê-lo
+   hoje é um no-op inofensivo (a AMAPI ignora campos desconhecidos do JSON); a decisão é
+   deliberada: se a AMAPI de produção da empresa algum dia expuser esse campo (versão
+   diferente, campo em beta), o valor certo já está sendo enviado sem precisar de deploy.
+
+**Consequência:** o teste de "tentativa de bypass" e "rollback de versão antiga" da seção 3
+cobre os dois campos — `uninstallAppsDisabled` (o que garante a proteção de verdade) e
+`uninstallBlocked` (defensivo). `installType` continua validado por app como a spec pede
+(`FORCE_INSTALLED`/`AVAILABLE`/`PREINSTALLED` sempre permitidos; `BLOCKED` só se já vinha
+`BLOCKED` no payload recebido — o invariante não decide sozinho o que bloquear). 100% de
+cobertura em `policy-invariants.ts`, conferido com `npm run test:coverage`.
+
+---
+
+## ADR-016 — Valores em aberto no seed das políticas padrão
+
+**Contexto:** a seção 7 pede duas políticas padrão (`administrativo`, `operacao-campo`)
+cobrindo uma lista de campos, mas não diz os VALORES que diferenciam uma da outra, nem um
+valor pra `maximumTimeToLock` (só cita o campo, não um número), nem quais apps cada perfil
+deve ter.
+
+**Decisões:**
+
+1. **As duas políticas nascem com o payload IDÊNTICO** (só `nome`/`descricao` diferem) — a
+   spec não pede nenhuma diferenciação de valores entre elas, e inventar uma (ex.: tempo de
+   bloqueio de tela mais curto pra campo) seria decidir uma regra de negócio que ninguém
+   pediu.
+2. **`maximumTimeToLock: 60000` (1 minuto)** — não pedido explicitamente, escolhido como
+   default conservador e comum em ambiente corporativo. Ajustável a qualquer momento via
+   `PATCH /policies/:id` (Fase 5) sem precisar rodar o seed de novo.
+3. **`applications: []` nas duas políticas** — a lista de apps de cada perfil (RH usa isso,
+   campo usa aquilo) é uma decisão de negócio real que ninguém definiu ainda; inventar
+   pacotes de app fictícios pra "preencher" seria pior que deixar vazio. `enforceInvariants`
+   não quebra com lista vazia — só não tem nada pra aplicar o invariante ainda.
+
+**Consequência:** o seed (`npm run db:seed`, `src/db/seed/politicas-padrao.ts`) é idempotente
+(não duplica se a política já existe, por `nome`) e não empurra nada pra AMAPI — só popula a
+tabela `politicas` local. O envio de verdade pra AMAPI acontece quando alguém editar/ativar a
+política pela rota (Fase 5), passando por `enforceInvariants` de novo naquele momento.
+**Pendência registrada:** lista de apps por perfil e eventual diferenciação entre os dois
+perfis dependem de decisão do Victor/negócio antes do go-live (mesma natureza das pendências
+de filiais/Pub/Sub do ADR-005).

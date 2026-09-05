@@ -23,14 +23,22 @@ export default defineConfig({
       // frameworks não cobram cobertura de `main()`).
       exclude: ['src/server.ts'],
       // Metas da seção 14 da spec: 80% geral, 100% em pontos críticos —
-      // aqui, RBAC (`src/plugins/rbac.ts`). `policy-invariants.ts` e os
-      // mappers da AMAPI entram na Fase 3, quando esses arquivos existirem.
+      // RBAC (`src/plugins/rbac.ts`) e o invariante de apps não-removíveis
+      // (`src/domain/policy/policy-invariants.ts`, critério explícito da
+      // Fase 3). Os mappers da AMAPI entram no mesmo padrão quando
+      // existirem endpoints reais consumindo-os (Fase 4+).
       thresholds: {
         lines: 80,
         statements: 80,
         functions: 80,
         branches: 75,
         'src/plugins/rbac.ts': {
+          lines: 100,
+          statements: 100,
+          functions: 100,
+          branches: 100,
+        },
+        'src/domain/policy/policy-invariants.ts': {
           lines: 100,
           statements: 100,
           functions: 100,

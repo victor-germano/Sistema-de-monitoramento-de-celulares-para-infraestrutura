@@ -8,7 +8,7 @@ Este repositório é **só backend**. A interface é construída por outra equip
 documentação gerada em [`docs/`](./docs) (destaque para `docs/HANDOFF-FRONTEND.md` e
 `docs/openapi.json`, entregues na Fase 7).
 
-> Estado atual: **Fase 2 — Schema e Auth** concluída. Ver `PROJECT_MEMORY.md` para o histórico
+> Estado atual: **Fase 3 — Adapter AMAPI + Invariantes** concluída. Ver `PROJECT_MEMORY.md` para o histórico
 > completo de decisões e o que falta.
 
 ## Stack
@@ -69,6 +69,7 @@ npm run test:coverage
 | `npm run db:generate`       | Gera migration a partir do schema Drizzle |
 | `npm run db:migrate`        | Aplica migrations pendentes               |
 | `npm run db:studio`         | UI do Drizzle Studio                      |
+| `npm run db:seed`           | Semeia as políticas padrão (idempotente)  |
 
 ## Documentação
 
