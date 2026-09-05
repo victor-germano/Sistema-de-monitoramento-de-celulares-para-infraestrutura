@@ -1,0 +1,26 @@
+# dependências
+node_modules/
+
+# build
+dist/
+*.tsbuildinfo
+
+# segredos e ambiente local — nunca commitar
+.env
+.env.local
+.env.*.local
+*.json.key
+service-account*.json
+
+# testes / cobertura
+coverage/
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / SO
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db

@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-mdm}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-mdm}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # Dentro da rede do compose o host é o nome do serviço, não `localhost`
+      # (que é o valor pensado pra rodar a API fora de container — ver
+      # comentário no .env.example).
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-mdm}
+      REDIS_URL: redis://redis:6379
+      # Força produção independente do que o `.env` local tiver — a imagem
+      # deste serviço é a de produção (Dockerfile, stage `runtime`, sem
+      # devDependencies). Em NODE_ENV=development o logger tenta carregar o
+      # transport `pino-pretty`, que não existe nessa imagem (é devDependency
+      # de propósito, pra não inflar a imagem final) — sem essa variável o
+      # container falha no boot com "unable to determine transport target".
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
