@@ -45,57 +45,77 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 - **ADR-005:** valores de configuração pendentes/placeholder (enterprise AMAPI, Pub/Sub,
   filiais) — ver seção "Pendências" abaixo.
 - **ADR-006:** `NODE_ENV` fixado em `production` no serviço `api` do `docker-compose.yml`.
+- **ADR-007:** enum de banco só pra categorias que o nosso sistema origina; texto livre pra
+  valores observados de sistemas externos (AMAPI/Pub/Sub).
+- **ADR-008:** append-only de `auditoria` é garantido por **trigger**, não pelo `REVOKE` da
+  seção 6 — testado contra Postgres real, o `REVOKE` sozinho não bloqueia o dono da tabela.
+- **ADR-009:** imports relativos usam extensão `.ts` (não `.js`) em todo o projeto —
+  necessário pra `drizzle-kit` conseguir carregar os arquivos de schema sob `moduleResolution: NodeNext`.
+- **ADR-010:** contrato de `/auth/callback` — state stateless (JWT curto), refresh token em
+  cookie httpOnly, nunca access token na URL do redirect.
+- **ADR-011:** `GET /usuarios` e `PATCH /usuarios/:id` adicionados (gap da seção 10 — sem
+  eles a exigência de "elevação de role manual por um ADMIN" da seção 5 seria inatingível).
+- **ADR-012:** bootstrap do primeiro ADMIN via `BOOTSTRAP_ADMIN_EMAILS`.
 
 ## Estado atual
 
-**Fase 1 — Fundação: concluída.**
+**Fase 2 — Schema e Auth: concluída.**
 
-O que existe e funciona:
+O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente abaixo):
 
-- Estrutura do repositório, TypeScript strict (+ `noUncheckedIndexedAccess`), ESLint 9 (flat
-  config, type-checked) + Prettier.
-- Fastify 5 com Helmet, CORS (`ALLOWED_ORIGINS`), rate limit global, Swagger/Swagger UI em
-  `/docs`, error handler RFC 9457 (`src/shared/problem-details.ts`).
-- Logger Pino com redaction de headers de auth/cookie e de campos de domínio sensíveis
-  (imei, serial, iccid, numero, token) já configurados por antecipação — nenhum desses
-  campos existe em objeto logado ainda, mas o contrato já está escrito.
-- `GET /health` checando Postgres e Redis de verdade (não mock) — 200 se ambos up, 503 se
-  algum estiver down. AMAPI **não** está no health check ainda (client só existe na Fase 3;
-  decisão deliberada de não simular um check que não existe).
-- Drizzle configurado (`src/db/client.ts`, `drizzle.config.ts`) apontando para
-  `src/db/schema/` — schema ainda vazio (placeholder), tabelas da seção 6 chegam na Fase 2.
-- `docker-compose.yml` (Postgres 16 + Redis 7 + API) e `Dockerfile` multi-stage.
-- Testes: unitário do schema de env (`test/unit/env.test.ts`) e integração real de `/health`
-  com Testcontainers subindo Postgres+Redis de verdade (`test/integration/health.test.ts`).
+- **Schema completo da seção 6** (13 tabelas, `src/db/schema/`) + migrations aplicadas
+  (`drizzle/migrations/0000_schema_inicial.sql`, `0001_revoke_auditoria_privileges.sql` — o
+  segundo com o trigger de append-only da `auditoria`, ADR-008). UUID v7 gerado em app
+  (ADR-001); enum de banco só pra categorias que o sistema origina (ADR-007).
+- **Login OIDC completo** (`GET /auth/login`, `GET /auth/callback`) — Authorization Code +
+  PKCE, state stateless via JWT curto (`src/domain/auth/oidc-state.ts`), validação de domínio
+  por provedor (`src/integrations/oidc/domain-validator.ts`, ADR-003), provisionamento JIT
+  com bootstrap de admin (`src/domain/usuarios/repositorio.ts`, ADR-012).
+- **Sessão:** JWT interno de 15 min (`src/domain/auth/session-tokens.ts`) + refresh token
+  opaco rotativo de 8h em cookie httpOnly (`src/domain/auth/refresh-tokens.ts`,
+  `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`). Contrato completo em ADR-010.
+- **RBAC:** `src/plugins/rbac.ts` (`withRole(...)`, registry de rotas pra garantir que
+  nenhuma fica sem declarar acesso — 100% de cobertura, meta da seção 14) +
+  `src/plugins/auth.ts` (decora `request.user` a partir do Bearer token).
+- **Gestão de usuário/role:** `GET /usuarios`, `PATCH /usuarios/:id` (ADR-011, gap da spec).
+- **Auditoria:** `src/domain/auditoria/registrar.ts`, usado em todo login/logout/rotação de
+  role — sempre na mesma transação da ação quando a ação é transacional.
+- 67 testes (unitários + integração com Testcontainers reais), cobertura 92,9%
+  statements/lines, 100% em `src/plugins/rbac.ts` (meta da seção 14 cumprida).
 
-Ainda não existe (por fase futura): schema/migrations reais, autenticação OIDC/RBAC,
-adapter AMAPI, consumer Pub/Sub, comandos, políticas, colaboradores/linhas, alertas,
-dashboards, documentação de handoff.
+Ainda não existe (por fase futura): adapter AMAPI, `enforceInvariants`, consumer Pub/Sub,
+comandos, políticas (CRUD), colaboradores/linhas (CRUD), alertas, dashboards, documentação
+de handoff.
 
-## Pendências conhecidas (bloqueiam fases específicas, não a Fase 1)
+## Pendências conhecidas (bloqueiam fases específicas, não a Fase 2)
 
-| Pendência                                           | Bloqueia                                      | Situação                                                                                          |
-| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Nome real da enterprise AMAPI (`enterprises/LC...`) | Teste E2E real contra a AMAPI (Fase 3+)       | Placeholder no `.env.example`; empresa vai confirmar                                              |
-| Nome do tópico/subscription Pub/Sub                 | Handler `ENROLLMENT`/`STATUS_REPORT` (Fase 4) | Arquivado — depende de conversa com equipe de frontend/infra                                      |
-| Lista de filiais existentes                         | Seed de dashboards/relatórios (Fase 6)        | Arquivado — mesma conversa acima                                                                  |
-| Versão mínima de Android                            | Alerta `SO_OBSOLETO` (Fase 6)                 | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                           |
-| Lista fechada de operadoras                         | `linhas.operadora`                            | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral" |
+| Pendência                                           | Bloqueia                                      | Situação                                                                                                                              |
+| --------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Nome real da enterprise AMAPI (`enterprises/LC...`) | Teste E2E real contra a AMAPI (Fase 3+)       | Placeholder no `.env.example`; empresa vai confirmar                                                                                  |
+| Nome do tópico/subscription Pub/Sub                 | Handler `ENROLLMENT`/`STATUS_REPORT` (Fase 4) | Arquivado — depende de conversa com equipe de frontend/infra                                                                          |
+| Lista de filiais existentes                         | Seed de dashboards/relatórios (Fase 6)        | Arquivado — mesma conversa acima                                                                                                      |
+| Versão mínima de Android                            | Alerta `SO_OBSOLETO` (Fase 6)                 | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                                                               |
+| Lista fechada de operadoras                         | `linhas.operadora`                            | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral"                                     |
+| Proteção contra remover o último `ADMIN`            | `PATCH /usuarios/:id`                         | Não implementado por decisão de escopo (ADR-011) — decisão explícita do Victor pendente antes da Fase 7                               |
+| Revogação em cascata no reuso de refresh token      | `POST /auth/refresh`                          | Reuso de token já rotacionado hoje só dá 401 nesse token; não revoga a "família" inteira (endurecimento futuro, não pedido pela spec) |
 
 ## Problemas conhecidos
 
-Nenhum em aberto. Um problema foi encontrado e corrigido durante a própria validação da
-Fase 1 — ver ADR-006 em `docs/DECISOES.md`: `NODE_ENV=development` vazando do `.env` local
-para dentro da imagem de produção do container `api`, derrubando o boot por falta do
-`pino-pretty` (devDependency, ausente na imagem final). Corrigido fixando
-`NODE_ENV: production` no `docker-compose.yml`.
+Nenhum em aberto. Um problema foi encontrado e corrigido durante a validação da Fase 2 — ver
+ADR-008: a abordagem literal da spec (`REVOKE UPDATE, DELETE` pro usuário da aplicação) não
+bloqueia nada quando essa role também é dona da tabela (é o caso deste projeto — uma única
+`DATABASE_URL` pra tudo). Substituído/reforçado por um trigger, testado contra Postgres real.
 
 ## Próximo passo
 
-Fase 2 — Schema e auth: todas as migrations da seção 6, seeds de dev, fluxo OIDC completo
-(Authorization Code + PKCE), JWT + refresh rotativo, RBAC com os 4 papéis, `/auth/*`,
-middleware de auditoria. **Aguardando OK do Victor para começar**, conforme a regra de
-trabalho por fases.
+Fase 3 — Adapter AMAPI + invariantes: módulos de `src/integrations/amapi/`,
+`enforceInvariants` com testes exaustivos (100% de cobertura, meta da seção 14), retry com
+backoff exponencial, fila BullMQ serializada de escrita de política, seed das duas políticas
+padrão (`administrativo`, `operacao-campo`). **Aguardando OK do Victor para começar.**
+
+Antes de começar a Fase 3, vale confirmar com o Victor: nome real da `AMAPI_ENTERPRISE_NAME`
+(hoje placeholder — ver ADR-005), já que sem ele o teste E2E real da Fase 3 fica bloqueado
+(fixtures/mocks cobrem o resto).
 
 ---
 
@@ -183,3 +203,71 @@ teste real via `docker compose up --build`, o bug (imagem de produção crashand
 
 **Pendências futuras:** ver tabela "Pendências conhecidas" acima + todo o backlog das
 Fases 2 a 7 da spec original.
+
+---
+
+### 2026-09-05 — Fase 2: Schema e Auth
+
+**Solicitação original:** "inicie a fase 2. O projeto está ok até então."
+
+**Status:** Concluída.
+
+**O que foi realizado:**
+
+- Schema completo da seção 6 (13 tabelas) + migrations aplicadas e validadas contra Postgres
+  real (incluindo o trigger de append-only da `auditoria`).
+- Fluxo OIDC completo (login, callback, provisionamento JIT, bootstrap de admin).
+- JWT de sessão + refresh token rotativo em cookie httpOnly.
+- RBAC (`withRole`, registry de rotas) + plugin de autenticação (`request.user`).
+- Endpoints de gestão de usuário/role (gap preenchido, ADR-011).
+- Auditoria de login/logout/rotação de role.
+- 67 testes (unitário + integração com Testcontainers reais), cobertura 92,9%, 100% em RBAC.
+
+**Arquivos criados:** `src/db/schema/{_shared,usuarios,refresh-tokens,colaboradores,linhas,politicas,dispositivos,comandos,enrollment-tokens,alertas,auditoria,eventos-brutos}.ts`;
+`drizzle/migrations/{0000_schema_inicial,0001_revoke_auditoria_privileges}.sql`;
+`src/domain/auth/{session-tokens,refresh-tokens,oidc-state,permissions}.ts`;
+`src/domain/usuarios/repositorio.ts`; `src/domain/auditoria/registrar.ts`;
+`src/integrations/oidc/{client,domain-validator}.ts`; `src/plugins/{auth,rbac}.ts`;
+`src/modules/auth/auth.routes.ts`; `test/unit/{rbac,session-tokens,oidc-state,oidc-domain-validator}.test.ts`;
+`test/integration/{rbac,refresh-tokens,auth-flow}.test.ts`; `tsconfig.build.json` (ajustado,
+não criado nesta fase).
+
+**Arquivos alterados:** `src/config/env.ts` (vars de OIDC/JWT), `src/app.ts` (registro dos
+plugins/rotas novos), `src/modules/health/health.routes.ts` (marcada `PUBLICA`),
+`src/db/schema/index.ts` (schema real, substituindo o placeholder), `tsconfig.json`
+(`allowImportingTsExtensions` + `rewriteRelativeImportExtensions`, ADR-009 — e todo import
+relativo do projeto migrado de `.js` pra `.ts`), `vitest.config.ts` (threshold 100% em
+`rbac.ts`, exclusão de `server.ts` da cobertura), `package.json` (novas dependências:
+`openid-client`, `jose`, `@fastify/cookie`, `fastify-plugin`), `.env.example`, `README.md`,
+`docs/SETUP.md`.
+
+**Arquivos removidos:** nenhum.
+
+**Funcionalidades afetadas:** toda a Fase 1 continua funcionando sem alteração de
+comportamento (`/health` inalterado, exceto agora marcado `PUBLICA` no registry de RBAC).
+
+**Decisões técnicas tomadas:** ADR-007 a ADR-012 (ver "Decisões técnicas tomadas" acima).
+
+**Impacto da alteração:** nenhuma regressão — Fase 1 revalidada (build/lint/typecheck/testes)
+depois de cada mudança estrutural (extensões de import, schema do Fastify context config).
+
+**Validação realizada:**
+
+- `npm run typecheck`, `npm run lint`, `npm run build`, `npm run format:check` — limpos.
+- `npm test` — 67/67 passando, incluindo:
+  - Migrations reais aplicadas contra Postgres 16 via Testcontainers.
+  - `REVOKE` da auditoria testado manualmente contra Postgres real via `psql` **antes** de
+    escrever o teste automatizado — foi assim que o ADR-008 foi descoberto.
+  - RBAC: teste que falha se alguma rota não declarar `roles`/`public`; 403 pra cada papel
+    não autorizado nas rotas `ADMIN`; `/auth/me` aceitando todos os 4 papéis.
+  - Fluxo de auth completo mockando só a troca de código por token (fronteira de rede real,
+    testada manualmente — ver `docs/SETUP.md`, seção "Login corporativo").
+  - Rotação de refresh token: reuso de token já rotacionado falha (sinal de token roubado).
+- `npm run test:coverage` — 92,9% statements/lines, 95,1% functions, 82,9% branches
+  (acima da meta de 80%/75% da seção 14); `src/plugins/rbac.ts` em 100/100/100/100.
+
+**Problemas encontrados:** um, corrigido antes de finalizar a fase — ver ADR-008
+(`REVOKE UPDATE, DELETE` não bloqueia o dono da tabela; resolvido com trigger).
+
+**Pendências futuras:** ver tabela "Pendências conhecidas" acima. Antes da Fase 3: confirmar
+`AMAPI_ENTERPRISE_NAME` real com o Victor (ADR-005).

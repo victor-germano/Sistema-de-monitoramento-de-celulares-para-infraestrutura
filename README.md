@@ -8,7 +8,7 @@ Este repositório é **só backend**. A interface é construída por outra equip
 documentação gerada em [`docs/`](./docs) (destaque para `docs/HANDOFF-FRONTEND.md` e
 `docs/openapi.json`, entregues na Fase 7).
 
-> Estado atual: **Fase 1 — Fundação** concluída. Ver `PROJECT_MEMORY.md` para o histórico
+> Estado atual: **Fase 2 — Schema e Auth** concluída. Ver `PROJECT_MEMORY.md` para o histórico
 > completo de decisões e o que falta.
 
 ## Stack
@@ -30,6 +30,19 @@ docker compose up -d postgres redis
 npm run dev        # API em modo watch, fora de container
 curl http://localhost:3000/health
 ```
+
+Pra rodar migrations e aplicar o schema (Fase 2):
+
+```bash
+npm run db:migrate
+```
+
+## Autenticação
+
+Login é sempre via OIDC do provedor corporativo (seção 5 da spec) — não existe usuário/senha
+local. Ver `docs/SETUP.md` para configurar `OIDC_CLIENT_ID`/`OIDC_CLIENT_SECRET` num projeto
+OAuth de teste e `BOOTSTRAP_ADMIN_EMAILS` pra sair de `VIEWER` no primeiro login. Contrato
+completo do fluxo (cookie de refresh, redirect de erro, etc.) em `docs/DECISOES.md` (ADR-010).
 
 Para rodar a stack inteira containerizada (API incluída):
 

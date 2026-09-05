@@ -1,7 +1,7 @@
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { env } from '../config/env.js';
-import * as schema from './schema/index.js';
+import { env } from '../config/env.ts';
+import * as schema from './schema/index.ts';
 
 // `max: 10` é um teto conservador pra um serviço interno de infraestrutura
 // (não uma API pública de alto tráfego). Revisamos se o pool virar gargalo

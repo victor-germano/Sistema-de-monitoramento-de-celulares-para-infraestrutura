@@ -1,8 +1,8 @@
-import { buildApp } from './app.js';
-import { env } from './config/env.js';
-import { logger } from './shared/logger.js';
-import { sql } from './db/client.js';
-import { redis } from './shared/redis-client.js';
+import { buildApp } from './app.ts';
+import { env } from './config/env.ts';
+import { logger } from './shared/logger.ts';
+import { sql } from './db/client.ts';
+import { redis } from './shared/redis-client.ts';
 
 async function main(): Promise<void> {
   const app = await buildApp();

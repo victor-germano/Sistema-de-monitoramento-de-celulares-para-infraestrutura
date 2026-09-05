@@ -1,5 +1,15 @@
-// Placeholder da Fase 1. As tabelas da seção 6 da spec (usuarios,
-// colaboradores, dispositivos, políticas, comandos, auditoria etc.) chegam
-// na Fase 2, um arquivo por domínio, todas re-exportadas daqui — é o que o
-// `drizzle.config.ts` e o `db/client.ts` já esperam encontrar.
-export {};
+// Barrel de todo o schema — o que `db/client.ts` e `drizzle.config.ts`
+// esperam encontrar aqui. Um arquivo por domínio (seção 6 da spec),
+// re-exportado como namespace pra manter os módulos de origem no
+// autocomplete (`schema.usuarios`, `schema.dispositivos`, ...).
+export * from './usuarios.ts';
+export * from './refresh-tokens.ts';
+export * from './colaboradores.ts';
+export * from './linhas.ts';
+export * from './politicas.ts';
+export * from './dispositivos.ts';
+export * from './comandos.ts';
+export * from './enrollment-tokens.ts';
+export * from './alertas.ts';
+export * from './auditoria.ts';
+export * from './eventos-brutos.ts';

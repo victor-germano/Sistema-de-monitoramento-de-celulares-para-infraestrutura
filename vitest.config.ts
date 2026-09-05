@@ -15,14 +15,27 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
       include: ['src/**/*.ts'],
-      // Metas da seção 14 da spec: 80% geral, 100% em pontos críticos.
-      // O enforcement por arquivo (policy-invariants, rbac, mappers) entra
-      // quando esses módulos existirem, a partir da Fase 2/3.
+      // `server.ts` é bootstrap de processo puro (bind de porta real,
+      // handlers de SIGTERM/SIGINT, `process.exit`) — não tem lógica de
+      // domínio pra testar, e testá-lo exigiria subir um processo Node
+      // filho só pra isso. Excluído da cobertura por ser infraestrutura de
+      // entrada, não código de negócio (mesmo raciocínio de por que
+      // frameworks não cobram cobertura de `main()`).
+      exclude: ['src/server.ts'],
+      // Metas da seção 14 da spec: 80% geral, 100% em pontos críticos —
+      // aqui, RBAC (`src/plugins/rbac.ts`). `policy-invariants.ts` e os
+      // mappers da AMAPI entram na Fase 3, quando esses arquivos existirem.
       thresholds: {
         lines: 80,
         statements: 80,
         functions: 80,
         branches: 75,
+        'src/plugins/rbac.ts': {
+          lines: 100,
+          statements: 100,
+          functions: 100,
+          branches: 100,
+        },
       },
     },
   },

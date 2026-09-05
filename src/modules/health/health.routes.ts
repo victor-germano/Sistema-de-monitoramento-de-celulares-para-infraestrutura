@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { checkDatabaseConnection } from '../../db/client.js';
-import { checkRedisConnection } from '../../shared/redis-client.js';
+import { checkDatabaseConnection } from '../../db/client.ts';
+import { checkRedisConnection } from '../../shared/redis-client.ts';
+import { PUBLICA } from '../../plugins/rbac.ts';
 
 export interface HealthCheck {
   status: 'up' | 'down';
@@ -21,7 +22,7 @@ export interface HealthResponse {
 export function registerHealthRoutes(app: FastifyInstance): void {
   // Liveness + readiness combinados nesta única rota, como pede a seção 10.
   // Sem autenticação (rota pública, junto com /auth/*).
-  app.get('/health', async (_request, reply) => {
+  app.get('/health', PUBLICA, async (_request, reply) => {
     const [databaseUp, redisUp] = await Promise.all([
       checkDatabaseConnection(),
       checkRedisConnection(),

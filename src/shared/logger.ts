@@ -1,5 +1,5 @@
 import pino, { type LoggerOptions } from 'pino';
-import { env } from '../config/env.js';
+import { env } from '../config/env.ts';
 
 // Redaction de dados sensíveis desde o primeiro commit — seção 11 da spec é
 // explícita: IMEI, serial, ICCID, número de linha, tokens e headers de

@@ -4,7 +4,7 @@
 // em vez da classe, e vira "not constructable"). O named export não sofre
 // desse problema.
 import { Redis } from 'ioredis';
-import { env } from '../config/env.js';
+import { env } from '../config/env.ts';
 
 // Cliente singleton. BullMQ (Fase 3+) e o motor de alertas (Fase 6) vão
 // reusar esta mesma instância em vez de abrir conexões próprias — mantém um

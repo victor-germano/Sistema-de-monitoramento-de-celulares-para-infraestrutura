@@ -10,3 +10,15 @@
 process.env.NODE_ENV ??= 'test';
 process.env.DATABASE_URL ??= 'postgres://test:test@localhost:5432/test';
 process.env.REDIS_URL ??= 'redis://localhost:6379';
+
+// Fase 2 — mesma lógica: valores fixos e óbvios de teste, nunca lidos de
+// verdade fora dos testes que especificamente exercitam OIDC de verdade
+// (nenhum, por ora — ver ADR-005 e docs/SETUP.md sobre login corporativo
+// ponta a ponta ser validação manual, não automatizada nesta fase).
+process.env.OIDC_ISSUER ??= 'https://accounts.google.com';
+process.env.OIDC_CLIENT_ID ??= 'test-client-id';
+process.env.OIDC_CLIENT_SECRET ??= 'test-client-secret';
+process.env.OIDC_REDIRECT_URI ??= 'http://localhost:3000/auth/callback';
+process.env.FRONTEND_URL ??= 'http://localhost:5173';
+process.env.ALLOWED_EMAIL_DOMAINS ??= 'gruporoveri.com.br';
+process.env.JWT_SECRET ??= 'test-jwt-secret-com-pelo-menos-32-caracteres';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envSchema } from '../../src/config/env.js';
+import { envSchema } from '../../src/config/env.ts';
 
 // Testa o schema puro (`envSchema.safeParse`), não `env.ts` inteiro — o
 // módulo `env.ts` faz `process.exit(1)` em config inválida no import, o que
@@ -8,6 +8,13 @@ describe('envSchema', () => {
   const base = {
     DATABASE_URL: 'postgres://user:pass@localhost:5432/db',
     REDIS_URL: 'redis://localhost:6379',
+    OIDC_ISSUER: 'https://accounts.google.com',
+    OIDC_CLIENT_ID: 'client-id',
+    OIDC_CLIENT_SECRET: 'client-secret',
+    OIDC_REDIRECT_URI: 'http://localhost:3000/auth/callback',
+    FRONTEND_URL: 'http://localhost:5173',
+    ALLOWED_EMAIL_DOMAINS: 'gruporoveri.com.br',
+    JWT_SECRET: 'segredo-de-teste-com-pelo-menos-32-caracteres',
   };
 
   it('aceita a configuração mínima válida e aplica os defaults', () => {
@@ -58,6 +65,47 @@ describe('envSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.PORT).toBe(4000);
+    }
+  });
+
+  it('rejeita JWT_SECRET com menos de 32 caracteres', () => {
+    const result = envSchema.safeParse({ ...base, JWT_SECRET: 'curto-demais' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejeita ALLOWED_EMAIL_DOMAINS vazio — precisa de pelo menos um domínio', () => {
+    const result = envSchema.safeParse({ ...base, ALLOWED_EMAIL_DOMAINS: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('faz parse de ALLOWED_EMAIL_DOMAINS com múltiplos domínios', () => {
+    const result = envSchema.safeParse({
+      ...base,
+      ALLOWED_EMAIL_DOMAINS: 'gruporoveri.com.br, outraempresa.com.br',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.ALLOWED_EMAIL_DOMAINS).toEqual([
+        'gruporoveri.com.br',
+        'outraempresa.com.br',
+      ]);
+    }
+  });
+
+  it('BOOTSTRAP_ADMIN_EMAILS é opcional e vira lista vazia por default', () => {
+    const result = envSchema.safeParse(base);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.BOOTSTRAP_ADMIN_EMAILS).toEqual([]);
+    }
+  });
+
+  it('aplica defaults de JWT_SESSION_TTL_MINUTES e REFRESH_TOKEN_TTL_HOURS', () => {
+    const result = envSchema.safeParse(base);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.JWT_SESSION_TTL_MINUTES).toBe(15);
+      expect(result.data.REFRESH_TOKEN_TTL_HOURS).toBe(8);
     }
   });
 });
