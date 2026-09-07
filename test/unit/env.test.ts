@@ -17,6 +17,8 @@ describe('envSchema', () => {
     JWT_SECRET: 'segredo-de-teste-com-pelo-menos-32-caracteres',
     AMAPI_ENTERPRISE_NAME: 'enterprises/LC00000000000000000',
     AMAPI_SERVICE_ACCOUNT_KEY_PATH: './secrets/amapi-service-account.json',
+    GOOGLE_CLOUD_PROJECT: 'projeto-teste',
+    PUBSUB_SUBSCRIPTION: 'subscription-teste',
   };
 
   it('aceita a configuração mínima válida e aplica os defaults', () => {
@@ -105,6 +107,13 @@ describe('envSchema', () => {
   it('rejeita AMAPI_ENTERPRISE_NAME fora do formato enterprises/<id>', () => {
     const result = envSchema.safeParse({ ...base, AMAPI_ENTERPRISE_NAME: 'LC00000000000000000' });
     expect(result.success).toBe(false);
+  });
+
+  it('rejeita quando GOOGLE_CLOUD_PROJECT ou PUBSUB_SUBSCRIPTION estão ausentes', () => {
+    const { GOOGLE_CLOUD_PROJECT: _omit, ...rest } = base;
+    expect(envSchema.safeParse(rest).success).toBe(false);
+    const { PUBSUB_SUBSCRIPTION: _omit2, ...rest2 } = base;
+    expect(envSchema.safeParse(rest2).success).toBe(false);
   });
 
   it('aplica defaults de JWT_SESSION_TTL_MINUTES e REFRESH_TOKEN_TTL_HOURS', () => {

@@ -15,6 +15,20 @@
       "when": 1788576816458,
       "tag": "0001_revoke_auditoria_privileges",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788599129285,
+      "tag": "0002_dispositivos_ativo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788599973545,
+      "tag": "0003_alertas_aberto_unico",
+      "breakpoints": true
     }
   ]
 }

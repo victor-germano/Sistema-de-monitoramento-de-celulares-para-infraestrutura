@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "alertas_aberto_unico_idx" ON "alertas" USING btree ("dispositivo_id","tipo") WHERE "alertas"."resolvido_em" is null;

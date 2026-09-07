@@ -50,6 +50,11 @@ export const dispositivos = pgTable(
     colaboradorId: uuid('colaborador_id').references(() => colaboradores.id),
     linhaId: uuid('linha_id').references(() => linhas.id),
     politicaId: uuid('politica_id').references(() => politicas.id),
+    // Gap real da seção 6/10 (ADR-018): `PATCH /devices/:id` explicitamente
+    // pede pra "vincular colaborador, linha, patrimônio, ativo" — mas a
+    // tabela de dispositivos da seção 6 não lista nenhuma coluna `ativo`.
+    // Adicionada na Fase 4, quando a rota que precisa dela foi escrita.
+    ativo: boolean('ativo').notNull().default(true),
     dataAquisicao: date('data_aquisicao'),
     fimGarantia: date('fim_garantia'),
     valorAquisicao: numeric('valor_aquisicao', { precision: 12, scale: 2 }),

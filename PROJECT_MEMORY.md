@@ -65,10 +65,24 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
   mesmo assim, defensivamente, por pedido do Victor.
 - **ADR-016:** valores em aberto no seed das políticas padrão (`maximumTimeToLock`, lista de
   apps por perfil) — decisões nossas/pendências de negócio, não pedidas pela spec.
+- **ADR-017:** formato real da mensagem Pub/Sub — `notificationType` em `message.attributes`
+  (não em `data`), `data` é o recurso cru, teste vem como `test`/`TEST`, existe
+  `ENTERPRISE_UPGRADE` fora da lista da seção 8.
+- **ADR-018:** coluna `dispositivos.ativo` (gap entre seção 6 e seção 10, mesmo padrão do
+  ADR-011).
+- **ADR-019:** 3 divergências no mapeamento `Device` (AMAPI) → `dispositivos`/
+  `dispositivo_apps` — `compliance_state` derivado (não existe na AMAPI), bateria/storage do
+  evento mais recente (não campo estático), `installType` de app nunca vem do
+  `STATUS_REPORT` (é atributo de política).
+- **ADR-020:** alerta aberto único por dispositivo+tipo garantido por índice único parcial
+  (`ON CONFLICT DO NOTHING`), não por check-then-insert.
+- **ADR-021:** suíte de testes serial (`fileParallelism: false`) — paralelismo, mesmo
+  limitado por thread, gerava overhead de orquestração do Testcontainers grande demais pro
+  Docker Desktop desta máquina (não é falta de memória do container em si).
 
 ## Estado atual
 
-**Fase 3 — Adapter AMAPI + Invariantes: concluída.**
+**Fase 4 — Inventário e Pub/Sub: concluída.**
 
 O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente abaixo):
 
@@ -114,38 +128,80 @@ O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente 
 - **Seed das duas políticas padrão** (`npm run db:seed`,
   `src/db/seed/politicas-padrao.ts`) — idempotente, valores em aberto documentados (ADR-016).
 
-Ainda não existe (por fase futura): consumer Pub/Sub, rotas HTTP de comandos/políticas/
-colaboradores/linhas (a fila e o adapter existem como biblioteca interna, sem rota ainda),
-alertas, dashboards, documentação de handoff. `client.ts` da AMAPI nunca foi exercitado
-contra a AMAPI real (sem enterprise real — ADR-005); testado mockando a fronteira de rede.
+**Fase 4 — Inventário e Pub/Sub**, adicionado a tudo acima:
 
-## Pendências conhecidas (bloqueiam fases específicas, não a Fase 3)
+- **Consumer Pub/Sub** (`src/workers/pubsub-consumer.ts`, processo dedicado —
+  `npm run worker:pubsub`) — formato real da mensagem confirmado contra a doc oficial do
+  Google (ADR-017: `notificationType` em `attributes`, `data` é o recurso cru). Grava toda
+  mensagem em `eventos_brutos` (idempotente por `messageId`) ANTES de processar, despacha por
+  tipo dentro de uma transação, só faz `ack()` depois do commit, `nack()` em erro. Watchdog de
+  15min sem atividade. Núcleo de processamento (`src/domain/eventos/processar-evento.ts`)
+  compartilhado com o replay manual.
+- **Handler `ENROLLMENT`** (`src/domain/eventos/handlers/enrollment.ts`) — correlaciona via
+  `Device.enrollmentTokenData` (= `additionalData` gravado na criação do token), cria o
+  dispositivo já vinculado (colaborador/patrimônio/política), marca o token como usado.
+  **Critério de aceite da fase cumprido e testado contra Postgres real** (Testcontainers):
+  enrollment de device de teste popula o banco sozinho.
+- **Handler `STATUS_REPORT`** (`src/domain/eventos/handlers/status-report.ts`) — atualiza
+  campos do dispositivo (mappers com 3 divergências reais documentadas, ADR-019), upsert de
+  `dispositivo_apps`, abre `APP_OBRIGATORIO_AUSENTE` quando falta um app `FORCE_INSTALLED` da
+  política — idempotente via índice único parcial (ADR-020), não check-then-insert.
+- **`GET /devices`** (filtros + cursor), **`GET /devices/:id`**, **`PATCH /devices/:id`**
+  (vínculo administrativo), **`GET /devices/:id/{apps,comandos,auditoria}`** — `AUDITOR`
+  explicitamente EXCLUÍDO de todas (ADR-004, achei que tinha esquecido essa regra já
+  confirmada e corrigi antes de fechar a fase).
+- **`GET /auditoria`** (novo, não estava no plano original desta fase) — visão global da
+  trilha de auditoria, é o único acesso do papel `AUDITOR` a qualquer coisa no sistema
+  (consequência direta do ADR-004).
+- **`POST /internal/pubsub/replay`** e **`POST /internal/sync/devices`** (só `ADMIN`) —
+  reprocessamento manual de eventos falhos e reconciliação completa contra a AMAPI.
+- Documentação por tópico pra quem for construir a interface: `docs/api/{pubsub-pipeline,
+devices,internal,auditoria}.md`.
+- 200+ testes (unitários + integração com Testcontainers reais) — ver números exatos na
+  entrada de histórico desta fase, abaixo.
 
-| Pendência                                                                                  | Bloqueia                                      | Situação                                                                                          |
-| ------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Nome real da enterprise AMAPI (`enterprises/LC...`)                                        | Teste E2E real contra a AMAPI                 | Placeholder no `.env.example`; empresa vai confirmar                                              |
-| Nome do tópico/subscription Pub/Sub                                                        | Handler `ENROLLMENT`/`STATUS_REPORT` (Fase 4) | Arquivado — depende de conversa com equipe de frontend/infra                                      |
-| Lista de filiais existentes                                                                | Seed de dashboards/relatórios (Fase 6)        | Arquivado — mesma conversa acima                                                                  |
-| Versão mínima de Android                                                                   | Alerta `SO_OBSOLETO` (Fase 6)                 | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                           |
-| Lista fechada de operadoras                                                                | `linhas.operadora`                            | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral" |
-| Diferenciação entre políticas `administrativo`/`operacao-campo` e lista de apps por perfil | CRUD de políticas (Fase 5)                    | Seed nasce com payload idêntico nas duas — ADR-016, decisão de negócio pendente                   |
+Ainda não existe (por fase futura): CRUD de políticas, rotas de comandos/colaboradores/linhas
+(o adapter e a fila existem como biblioteca interna, sem rota ainda), alertas além de
+`APP_OBRIGATORIO_AUSENTE` (os outros 8 tipos da seção 9 são Fase 6), dashboards, documentação
+de handoff. `client.ts`/o consumer nunca foram exercitados contra a AMAPI/Pub/Sub reais (sem
+enterprise/subscription reais — ADR-005); testados mockando a fronteira de rede.
+
+## Pendências conhecidas (bloqueiam fases específicas, não a Fase 4)
+
+| Pendência                                                                                  | Bloqueia                                             | Situação                                                                                          |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Nome real da enterprise AMAPI (`enterprises/LC...`)                                        | Teste E2E real contra a AMAPI e o Pub/Sub            | Placeholder no `.env.example`; empresa vai confirmar                                              |
+| Nome do tópico/subscription Pub/Sub                                                        | Idem — consumer só roda contra evento sintético hoje | Arquivado — depende de conversa com equipe de frontend/infra                                      |
+| Valores exatos do enum `MemoryEventType` (bateria/storage)                                 | Precisão de `bateriaPct`/`storageLivreMb`            | ADR-019 — heurística tolerante até validar contra device real                                     |
+| Lista de filiais existentes                                                                | Seed de dashboards/relatórios (Fase 6)               | Arquivado — mesma conversa acima                                                                  |
+| Versão mínima de Android                                                                   | Alerta `SO_OBSOLETO` (Fase 6)                        | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                           |
+| Lista fechada de operadoras                                                                | `linhas.operadora`                                   | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral" |
+| Diferenciação entre políticas `administrativo`/`operacao-campo` e lista de apps por perfil | CRUD de políticas (Fase 5)                           | Seed nasce com payload idêntico nas duas — ADR-016, decisão de negócio pendente                   |
 
 ## Problemas conhecidos
 
-Nenhum em aberto. Um foi corrigido durante a Fase 2 (ADR-008, `REVOKE` não bloqueia dono da
-tabela) e outro durante a Fase 3: a spec pedia um campo (`uninstallBlocked` por app) que não
-existe na AMAPI atual — corrigido usando o mecanismo real (`uninstallAppsDisabled` a nível de
-política), confirmado contra a documentação oficial do Google antes de implementar (ADR-015).
+Nenhum em aberto no código. Um foi corrigido durante a Fase 2 (ADR-008, `REVOKE` não bloqueia
+dono da tabela), outro durante a Fase 3 (ADR-015, `uninstallBlocked` não existe na AMAPI
+atual), e durante a Fase 4:
+
+- **RBAC:** `devices.routes.ts` foi escrito inicialmente liberando leitura pro papel
+  `AUDITOR` — contradizia o ADR-004, já confirmado com o Victor desde 2026-09-04. Encontrado e
+  corrigido antes de fechar a fase, com o efeito colateral positivo de criar o endpoint que
+  faltava pro `AUDITOR` ter algum acesso de verdade (`GET /auditoria`).
+- **Infra de teste (não é bug de produto):** com 10+ arquivos de integração via
+  Testcontainers, o paralelismo padrão do Vitest sobrecarregava o Docker Desktop desta
+  máquina (Windows/WSL2) — corrigido com suíte serial (ADR-021). Nenhum impacto no
+  comportamento da aplicação, só no tempo/estabilidade de rodar os testes localmente.
 
 ## Próximo passo
 
-Fase 4 — Inventário e Pub/Sub: consumer completo (`src/workers/pubsub-consumer.ts`),
-`eventos_brutos`, handlers `ENROLLMENT` e `STATUS_REPORT`, endpoints de devices e apps,
-replay, reconciliação full. **Aguardando OK do Victor para começar.**
+Fase 5 — CRUD de políticas (rotas HTTP em cima do adapter/fila que já existem como biblioteca
+interna desde a Fase 3), comandos (`POST /devices/:id/comandos`, emissão de verdade contra a
+AMAPI), rotas de colaboradores/linhas. **Aguardando OK do Victor para começar.**
 
-Antes de começar a Fase 4, vale resolver com o Victor: nome do tópico/subscription Pub/Sub
-(hoje arquivado — ver ADR-005), sem o qual o handler `ENROLLMENT`/`STATUS_REPORT` fica
-limitado a testes com evento sintético, sem uma subscription real pra consumir.
+Vale resolver antes ou durante a Fase 5, sem bloquear o início: nome do tópico/subscription
+Pub/Sub e da enterprise AMAPI (ADR-005) — sem eles, o consumer da Fase 4 continua rodando só
+contra evento sintético em teste, nunca contra tráfego real.
 
 ---
 
@@ -402,3 +458,79 @@ Achado ANTES de implementar (não depois), consultando a documentação oficial 
 
 **Pendências futuras:** ver tabela "Pendências conhecidas" acima. Antes da Fase 4: tópico/
 subscription Pub/Sub (ADR-005).
+
+---
+
+### 2026-09-06 — Fase 4: Inventário e Pub/Sub
+
+**Solicitação original:** "retome" (na sessão anterior, após a conclusão da Fase 3 — a regra
+de trabalho por fases da própria spec já apontava a Fase 4 como próximo passo natural).
+
+**Status:** Concluída.
+
+**O que foi realizado:**
+
+- Consumer Pub/Sub completo (`src/workers/pubsub-consumer.ts`) com formato de mensagem
+  confirmado contra a documentação oficial do Google ANTES de implementar (ADR-017) — a seção
+  8 original não especificava onde `notificationType` vive nem que `data` é o recurso cru.
+- Handlers `ENROLLMENT` (critério de aceite da fase, testado contra Postgres real) e
+  `STATUS_REPORT` (upsert de apps + alerta `APP_OBRIGATORIO_AUSENTE`, idempotente via índice
+  único parcial — ADR-020).
+- Mapeamento `Device`/`ApplicationReport` → schema interno, com 3 divergências reais achadas
+  e documentadas ANTES de implementar (ADR-019).
+- Coluna `dispositivos.ativo` (gap seção 6/10, mesmo padrão do ADR-011 — ver ADR-018).
+- Endpoints de leitura/vínculo de `/devices`, `/internal/pubsub/replay`,
+  `/internal/sync/devices`, e `GET /auditoria` (não previsto no plano original desta fase —
+  criado como consequência direta de corrigir o ADR-004, ver abaixo).
+- 4 markdowns de documentação por tópico em `docs/api/` (pipeline Pub/Sub, devices, internal,
+  auditoria) — pedido explícito do Victor nesta retomada ("a cada tópico, faça um markdown").
+- `mappers.ts` (Fase 3) atingiu 100% de cobertura de branch pela primeira vez, exigência da
+  seção 14 agora que a AMAPI mapeia device de verdade — refatorado pra eliminar um branch
+  morto (`?? ''` num `.sort()` cujo `.filter()` anterior já garantia não-nulo).
+
+**Arquivos criados:** `src/workers/{watchdog,pubsub-consumer}.ts`;
+`src/domain/eventos/{processar-evento,handlers/enrollment,handlers/status-report}.ts`;
+`src/domain/{dispositivos,alertas,comandos}/repositorio.ts`;
+`src/modules/{devices/devices.routes,internal/internal.routes,auditoria/auditoria.routes}.ts`;
+`drizzle/migrations/{0002_dispositivos_ativo,0003_alertas_aberto_unico}.sql`;
+`test/unit/{watchdog,pubsub-consumer,amapi-mappers}.test.ts`;
+`test/integration/{fase4-inventario,devices-routes}.test.ts`; `docs/api/{README,
+pubsub-pipeline,devices,internal,auditoria}.md`.
+
+**Arquivos alterados:** `src/db/schema/{dispositivos,alertas}.ts` (colunas/índice novos),
+`src/domain/auditoria/registrar.ts` (`listarAuditoria` genérica, filtrável — a base do
+`GET /auditoria` novo), `src/integrations/amapi/mappers.ts` (mapeamento de Device/apps +
+refatoração pra 100% de branch), `src/config/env.ts`/`.env.example`/`test/setup.ts`
+(`GOOGLE_CLOUD_PROJECT`, `PUBSUB_SUBSCRIPTION`), `src/app.ts` (registro das 3 rotas novas),
+`package.json` (`@google-cloud/pubsub`, script `worker:pubsub`), `vitest.config.ts` (100% em
+`mappers.ts`; `fileParallelism: false`, ADR-021), `README.md`/`docs/SETUP.md` (Fase 4 +
+troubleshooting de Testcontainers), `docs/DECISOES.md` (ADR-017 a ADR-021).
+
+**Arquivos removidos:** nenhum.
+
+**Funcionalidades afetadas:** nenhuma das Fases 1–3 — só adição, exceto a correção de RBAC
+abaixo (rotas desta própria fase, nunca chegaram a ser usadas por ninguém).
+
+**Decisões técnicas tomadas:** ADR-017 a ADR-021 (ver "Decisões técnicas tomadas" acima).
+
+**Impacto da alteração:** nenhuma regressão nas Fases 1–3 — revalidadas junto de cada rodada
+de testes desta fase.
+
+**Validação realizada:**
+
+- `npm run typecheck`/`lint`/`build`/`format:check` — limpos.
+- `npm test` — 200/200 passando (23 arquivos, suíte serial, ADR-021; ~6min com o Docker
+  Desktop saudável).
+- `npm run test:coverage` — 93,8% statements/lines, 98,2% functions, 84,8% branches; 100% em
+  `src/plugins/rbac.ts`, `src/domain/policy/policy-invariants.ts` **e**, pela primeira vez,
+  `src/integrations/amapi/mappers.ts` (as três metas explícitas de 100% da seção 14
+  cumpridas).
+- Critério de aceite explícito da fase confirmado contra Postgres real via Testcontainers:
+  enrollment de device de teste popula `dispositivos` com o vínculo correto, sozinho, sem
+  nenhuma ação manual depois.
+
+**Problemas encontrados:** dois, ambos corrigidos antes de fechar a fase — ver "Problemas
+conhecidos" acima (RBAC do `AUDITOR` corrigido, ADR-004; infra de teste ajustada, ADR-021).
+
+**Pendências futuras:** ver tabela "Pendências conhecidas" acima. Nenhuma bloqueia o início
+da Fase 5.

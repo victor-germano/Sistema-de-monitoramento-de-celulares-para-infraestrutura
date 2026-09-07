@@ -17,6 +17,9 @@ import { registerHealthRoutes } from './modules/health/health.routes.ts';
 import authPlugin from './plugins/auth.ts';
 import rbacPlugin from './plugins/rbac.ts';
 import { registerAuthRoutes } from './modules/auth/auth.routes.ts';
+import { registerDeviceRoutes } from './modules/devices/devices.routes.ts';
+import { registerInternalRoutes } from './modules/internal/internal.routes.ts';
+import { registerAuditoriaRoutes } from './modules/auditoria/auditoria.routes.ts';
 
 // Fábrica em vez de instância no módulo top-level: os testes de integração
 // precisam construir a app DEPOIS de setar as env vars dos containers do
@@ -71,6 +74,9 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   registerHealthRoutes(app);
   registerAuthRoutes(app);
+  registerDeviceRoutes(app);
+  registerInternalRoutes(app);
+  registerAuditoriaRoutes(app);
 
   return app;
 }

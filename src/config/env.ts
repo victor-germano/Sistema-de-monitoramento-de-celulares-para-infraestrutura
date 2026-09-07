@@ -62,6 +62,14 @@ export const envSchema = z.object({
   // quebrar por string vazia.
   AMAPI_ENTERPRISE_NAME: z.string().regex(/^enterprises\/.+/, 'formato esperado: enterprises/<id>'),
   AMAPI_SERVICE_ACCOUNT_KEY_PATH: z.string().min(1),
+
+  // --- Pub/Sub (Fase 4) -------------------------------------------------
+  // Só a subscription é consumida em runtime (`src/workers/pubsub-consumer.ts`)
+  // — o tópico (`PUBSUB_TOPIC`) é referência pra documentação/setup, quem
+  // publica nele é a própria AMAPI, não o nosso código (seção 2: recursos
+  // já provisionados, nunca criados em runtime).
+  GOOGLE_CLOUD_PROJECT: z.string().min(1),
+  PUBSUB_SUBSCRIPTION: z.string().min(1),
 });
 
 function splitList(value: string): string[] {

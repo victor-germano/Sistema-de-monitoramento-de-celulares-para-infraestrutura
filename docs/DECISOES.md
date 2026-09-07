@@ -392,3 +392,143 @@ política pela rota (Fase 5), passando por `enforceInvariants` de novo naquele m
 **Pendência registrada:** lista de apps por perfil e eventual diferenciação entre os dois
 perfis dependem de decisão do Victor/negócio antes do go-live (mesma natureza das pendências
 de filiais/Pub/Sub do ADR-005).
+
+---
+
+## ADR-017 — Formato real das notificações Pub/Sub da AMAPI
+
+**Contexto:** antes de escrever o consumer (seção 8), confirmei o formato real da mensagem
+na [documentação oficial](https://developers.google.com/android/management/notifications) —
+e ele é diferente do que a seção 8 dá a entender (que fala em ler "`notificationType`" sem
+especificar onde).
+
+**O que a doc do Google diz, literalmente:** _"The `attributes` field of the message
+contains an attribute with key `notificationType`... The `data` field of the message
+contains the JSON representation of the resource that was updated."_ Ou seja:
+
+1. **`notificationType` vem de `message.attributes.notificationType`**, não de um campo
+   dentro do JSON de `data`.
+2. **`data` é o RECURSO cru**, não um envelope — `ENROLLMENT`/`STATUS_REPORT` →
+   `Device`; `COMMAND` → `Operation`; `USAGE_LOGS` → `UsageLogEvent`. Não existe um campo
+   comum tipo `{ notificationType, device: {...} }` — o próprio `data` JÁ é o `Device`.
+3. **Existe um tipo a mais que a spec não lista:** `ENTERPRISE_UPGRADE`. Tratado como
+   "notificationType desconhecido" (só grava em `eventos_brutos`, sem handler específico) —
+   não é um requisito novo, é só a AMAPI podendo mandar mais tipos do que os 5 da seção 8.
+4. **O valor da mensagem de teste é `test` (minúsculo)**, não `TEST` como a seção 8 escreve.
+
+**Como o `ENROLLMENT` sabe qual `enrollment_token` foi usado:** a seção 7 diz que
+`additionalData` "permite vincular automaticamente" mas não diz COMO — o campo
+`Device.enrollmentTokenData` (confirmado no schema do `googleapis`) é exatamente o valor de
+`additionalData` que setamos na criação do token. É dali que o handler de `ENROLLMENT` lê o
+`tokenId` interno pra achar a linha certa em `enrollment_tokens`.
+
+**Decisão:** `src/workers/pubsub-consumer.ts` lê `notificationType` de `message.attributes`,
+trata `data` como o recurso puro (tipado por notificationType), aceita `test`/`TEST` como
+sinônimos pro caso de teste, e loga (sem handler) qualquer tipo não mapeado, incluindo
+`ENTERPRISE_UPGRADE`. `eventos_brutos.payload` grava `{ attributes, data }` juntos — fiel à
+mensagem inteira, não só ao recurso — pra não perder informação nenhuma no replay.
+
+**Consequência:** se essa doc mudar ou eu tiver lido errado, o sintoma seria bem visível —
+`eventos_brutos.notification_type` viria `null`/vazio pra toda mensagem real. Vale conferir
+de novo assim que houver um enrollment de verdade contra a AMAPI (bloqueado hoje pela
+enterprise placeholder, ADR-005).
+
+---
+
+## ADR-018 — Coluna `dispositivos.ativo` (gap entre seção 6 e seção 10)
+
+**Contexto:** a seção 10 é explícita — `PATCH /devices/:id` "vincula colaborador, linha,
+patrimônio, **ativo**". A tabela `dispositivos` da seção 6 não lista nenhuma coluna `ativo`.
+Mesmo padrão do ADR-011 (rota pedindo dado que o schema original não previu).
+
+**Decisão:** adicionada `ativo boolean not null default true` em `dispositivos`
+(`drizzle/migrations/0002_dispositivos_ativo.sql`), na Fase 4, quando a rota que
+efetivamente precisa dela foi escrita — não antecipada sem uso na Fase 2.
+
+**Consequência:** dispositivo recém-provisionado (handler `ENROLLMENT`) nasce `ativo: true`
+por default. Desativar um dispositivo (ex.: extraviado, aguardando devolução) fica só como
+sinalização — não desprovisiona nem revoga nada na AMAPI sozinho; isso continua exigindo uma
+ação explícita (comando de wipe, Fase 5) ou o fluxo de desligamento (seção 10, Fase 6).
+
+---
+
+## ADR-019 — Mapeamento `Device` (AMAPI) → `dispositivos`/`dispositivo_apps`: 3 divergências
+
+**Contexto:** ao escrever `mapearCamposDispositivo`/`mapearAppsDoDispositivo`
+(`src/integrations/amapi/mappers.ts`) pro handler `STATUS_REPORT`, conferi o `Schema$Device`
+real do `googleapis` campo a campo contra a seção 6 e achei três pontos sem correspondência
+direta.
+
+1. **Não existe `compliance_state` no `Device`** — só `policyCompliant` (boolean) e
+   `nonComplianceDetails` (lista de motivos). **Decisão:** `complianceState` é derivado de
+   `policyCompliant` (`true` → `'COMPLIANT'`, `false` → `'NON_COMPLIANT'`, ausente →
+   `undefined`/desconhecido) em vez de copiado de um campo que não existe.
+2. **Bateria e storage livre não são campos estáticos** — são o evento mais recente de
+   `powerManagementEvents`/`memoryEvents` (arrays cronológicos). **Decisão:** pega o evento
+   mais recente por `createTime`. Pro storage, o filtro usa "`eventType` contém STORAGE"
+   (case-insensitive) em vez de comparar contra um literal exato do enum
+   `MemoryEventType`, porque não consegui confirmar os valores exatos desse enum na
+   documentação pública disponível. **Pendência:** validar contra um device real assim que
+   houver um (bloqueado pela enterprise placeholder, ADR-005) — até lá, os alertas
+   `STORAGE_CRITICO`/`BATERIA_DEGRADADA` (Fase 6) herdam essa incerteza.
+3. **`ApplicationReport` não tem `installType`** — isso é atributo de POLÍTICA (o que
+   queremos instalado), não do relatório do device (o que está instalado observado).
+   **Decisão:** `dispositivo_apps.install_type` fica sem valor quando vem do
+   `STATUS_REPORT` — não inventado. O alerta `APP_OBRIGATORIO_AUSENTE` compara a política
+   contra `dispositivo_apps.package_name` diretamente, não contra essa coluna.
+
+**Consequência:** nenhuma dessas três bloqueia o critério da Fase 4 (o enrollment popular o
+banco sozinho) — todas afetam só a PRECISÃO de dados que só chegam via `STATUS_REPORT`,
+processado depois do enrollment.
+
+---
+
+## ADR-020 — Índice único parcial pra alerta aberto, não check-then-insert
+
+**Contexto:** o handler `STATUS_REPORT` (Fase 4) precisa abrir o alerta `APP_OBRIGATORIO_
+AUSENTE` sem duplicar em `STATUS_REPORT`s consecutivos com o mesmo app faltando. A seção 6
+não especifica o mecanismo de idempotência — um check-then-insert (`SELECT` seguido de
+`INSERT` se não achou) tem uma janela de corrida real entre duas mensagens do mesmo device
+processadas em paralelo.
+
+**Decisão:** `alertas` ganhou um índice único PARCIAL —
+`UNIQUE (dispositivo_id, tipo) WHERE resolvido_em IS NULL`
+(`drizzle/migrations/0003_alertas_aberto_unico.sql`) — e `abrirAlertaSeNaoExistir`
+(`src/domain/alertas/repositorio.ts`) usa `ON CONFLICT DO NOTHING` contra ele, não um
+check-then-insert.
+
+**Consequência:** um alerta ABERTO é único por dispositivo+tipo, garantido pelo próprio
+Postgres, não pela ordem de chamadas da aplicação. Vários alertas RESOLVIDOS do mesmo tipo
+pro mesmo device continuam permitidos (histórico esperado: o problema aconteceu, foi
+corrigido, aconteceu de novo). `where` no `onConflictDoNothing` do Drizzle precisa casar
+exatamente com o predicado do índice parcial — sem isso o Postgres rejeita o `ON CONFLICT`
+em runtime ("no unique or exclusion constraint matching").
+
+---
+
+## ADR-021 — Suíte de testes serial (`fileParallelism: false`), não por threads limitadas
+
+**Contexto:** a partir da Fase 4 a suíte passou a ter mais de 10 arquivos de integração
+subindo Postgres/Redis via Testcontainers. O paralelismo TOTAL padrão do Vitest (todo arquivo
+ao mesmo tempo) estourava o `hookTimeout` na criação dos containers, em ambiente de
+desenvolvimento (Windows + Docker Desktop + WSL2). Tentei `poolOptions.threads.maxThreads: 3`
+como meio-termo antes de chegar nesta decisão — **não resolveu**, e o diagnóstico foi direto
+ao ponto: um `docker run postgres:16-alpine` isolado, rodado manualmente durante a mesma
+janela de falhas, ficou pronto pra aceitar conexões em ~1 segundo. Ou seja, o gargalo não é
+memória/CPU do container Postgres em si — é overhead da própria orquestração do
+Testcontainers (criação de rede Docker, sessão do reaper Ryuk, port binding, polling de log)
+quando várias instâncias disparam essas chamadas contra a API do Docker Desktop/WSL2 ao mesmo
+tempo. Também foi identificada e removida uma causa concorrente real: dois containers de
+OUTRO projeto (não deste repositório) rodando havia 45h consumindo parte da memória, já
+limitada (~3.7GB), do Docker Desktop desta máquina — removê-los sozinho não foi suficiente,
+confirmando que o gargalo principal é mesmo o overhead de orquestração concorrente, não RAM.
+
+**Decisão:** `fileParallelism: false` (`vitest.config.ts`) — suíte de testes inteira roda em
+sequência, um arquivo por vez. `hookTimeout` mantido em 90s como margem extra pro `beforeAll`
+mais lento (subida de container + migrations).
+
+**Consequência:** suíte local mais lenta no total (dezenas de minutos, não segundos) — troca
+deliberada de velocidade por determinismo. Em CI (runners Linux hospedados, sem a camada
+WSL2 e com uma API Docker nativa, não emulada) esse overhead de orquestração tende a ser bem
+menor; se o tempo de CI incomodar, vale medir lá antes de reintroduzir paralelismo — não
+assumir que o mesmo gargalo desta máquina Windows se repete.

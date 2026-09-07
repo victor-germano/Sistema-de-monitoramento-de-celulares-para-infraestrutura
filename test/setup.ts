@@ -27,3 +27,9 @@ process.env.JWT_SECRET ??= 'test-jwt-secret-com-pelo-menos-32-caracteres';
 // reais neste ambiente, ver ADR-005); a fronteira de rede é sempre mockada.
 process.env.AMAPI_ENTERPRISE_NAME ??= 'enterprises/LC00000000000000000';
 process.env.AMAPI_SERVICE_ACCOUNT_KEY_PATH ??= './test/fixtures/amapi-service-account.json';
+
+// Fase 4 — idem: nenhum teste conecta no Pub/Sub real (sem tópico/subscription
+// reais ainda, ver ADR-005); o consumer é testado injetando mensagens
+// sintéticas, não conectando na infra do GCP.
+process.env.GOOGLE_CLOUD_PROJECT ??= 'projeto-teste';
+process.env.PUBSUB_SUBSCRIPTION ??= 'subscription-teste';

@@ -10,7 +10,22 @@ export default defineConfig({
     // tanto pra baixar a imagem na primeira vez quanto pro container ficar
     // pronto (healthcheck).
     testTimeout: 60_000,
-    hookTimeout: 60_000,
+    hookTimeout: 90_000,
+    // Fase 4: com 10+ arquivos de integração subindo Postgres/Redis via
+    // Testcontainers, o paralelismo TOTAL padrão do Vitest (todos os
+    // arquivos ao mesmo tempo) estourava o `hookTimeout` na criação dos
+    // containers, em máquina de desenvolvimento Windows/Docker Desktop.
+    // Testado `maxThreads: 3` como meio-termo — não resolveu (o gargalo não
+    // é memória do container em si: um `docker run postgres` isolado fica
+    // pronto em ~1s mesmo com a máquina "carregada"; é overhead da própria
+    // orquestração do Testcontainers — criação de rede, sessão do Ryuk,
+    // port binding — quando várias rodam ao mesmo tempo contra a API do
+    // Docker Desktop/WSL2). `fileParallelism: false` (serial completo) é o
+    // que efetivamente funciona aqui: mais lento no total, mas
+    // determinístico. Em CI (runners Linux, sem a camada WSL2) isso tende a
+    // ter bem mais folga — reavaliar paralelismo lá se o tempo de CI
+    // incomodar, não replicar esta config às cegas.
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
@@ -23,10 +38,10 @@ export default defineConfig({
       // frameworks não cobram cobertura de `main()`).
       exclude: ['src/server.ts'],
       // Metas da seção 14 da spec: 80% geral, 100% em pontos críticos —
-      // RBAC (`src/plugins/rbac.ts`) e o invariante de apps não-removíveis
-      // (`src/domain/policy/policy-invariants.ts`, critério explícito da
-      // Fase 3). Os mappers da AMAPI entram no mesmo padrão quando
-      // existirem endpoints reais consumindo-os (Fase 4+).
+      // RBAC (`src/plugins/rbac.ts`), o invariante de apps não-removíveis
+      // (`src/domain/policy/policy-invariants.ts`, Fase 3) e, a partir da
+      // Fase 4, os mappers da AMAPI (`src/integrations/amapi/mappers.ts`) —
+      // agora consumidos por handlers reais (`ENROLLMENT`/`STATUS_REPORT`).
       thresholds: {
         lines: 80,
         statements: 80,
@@ -39,6 +54,12 @@ export default defineConfig({
           branches: 100,
         },
         'src/domain/policy/policy-invariants.ts': {
+          lines: 100,
+          statements: 100,
+          functions: 100,
+          branches: 100,
+        },
+        'src/integrations/amapi/mappers.ts': {
           lines: 100,
           statements: 100,
           functions: 100,

@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  index,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { criadoEm, uuidPk } from './_shared.ts';
 import { dispositivos } from './dispositivos.ts';
 
@@ -47,6 +56,16 @@ export const alertas = pgTable(
     // linhas resolvidas que ninguém mais consulta por esse critério.
     index('alertas_resolvido_em_aberto_idx')
       .on(t.resolvidoEm)
+      .where(sql`${t.resolvidoEm} is null`),
+    // ADR-020: único ABERTO por (dispositivo, tipo) — histórico permite
+    // vários alertas RESOLVIDOS do mesmo tipo pro mesmo device (isso é o
+    // esperado: o problema aconteceu, foi corrigido, aconteceu de novo).
+    // É esse índice parcial que torna `abrirAlertaSeNaoExistir` (Fase 4)
+    // atômico via `ON CONFLICT DO NOTHING` em vez de um check-then-insert
+    // vulnerável a corrida entre duas mensagens Pub/Sub do mesmo device
+    // processadas em paralelo.
+    uniqueIndex('alertas_aberto_unico_idx')
+      .on(t.dispositivoId, t.tipo)
       .where(sql`${t.resolvidoEm} is null`),
   ],
 );
