@@ -1,7 +1,7 @@
-// Rotas de leitura/vínculo de dispositivos — seção 10, Fase 4. Emissão de
-// comando (`POST /devices/:id/comandos`) e troca de política ficam pra Fase
-// 5; aqui só existe o que a Fase 4 entrega: inventário populado por
-// ENROLLMENT/STATUS_REPORT e o vínculo administrativo (`PATCH`).
+// Rotas de leitura/vínculo/comando de dispositivos — seção 10. Inventário
+// (Fase 4) populado por ENROLLMENT/STATUS_REPORT; emissão de comando de
+// verdade contra a AMAPI (Fase 5) via `POST /devices/:id/comandos`.
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -16,8 +16,12 @@ import {
   listarAuditoriaPorEntidade,
   registrarAuditoria,
 } from '../../domain/auditoria/registrar.ts';
+import { env } from '../../config/env.ts';
 import { db } from '../../db/client.ts';
+import { comandos } from '../../db/schema/comandos.ts';
+import { emitirComando, emitirWipe } from '../../integrations/amapi/commands.ts';
 import { sendProblem } from '../../shared/problem-details.ts';
+import { logger } from '../../shared/logger.ts';
 import { withRole } from '../../plugins/rbac.ts';
 
 const paramsIdSchema = z.object({ id: z.string().uuid() });
@@ -48,6 +52,50 @@ const patchBodySchema = z.object({
 const listarSubrecursoQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).optional(),
 });
+
+// União discriminada por `tipo` — cada variante só aceita os campos que
+// aquele comando de fato usa (seção 7): `novaSenha` só existe pra
+// RESET_PASSWORD, `pacotes` só pra CLEAR_APP_DATA. WIPE exige dupla
+// confirmação (patrimônio digitado + motivo ≥ 20 caracteres) — decisão já
+// registrada no adapter (`src/integrations/amapi/commands.ts`) como
+// responsabilidade desta rota.
+const emitirComandoBodySchema = z.discriminatedUnion('tipo', [
+  z.object({ tipo: z.literal('LOCK') }),
+  z.object({ tipo: z.literal('REBOOT') }),
+  z.object({ tipo: z.literal('RESET_PASSWORD'), novaSenha: z.string().min(6).optional() }),
+  z.object({ tipo: z.literal('CLEAR_APP_DATA'), pacotes: z.array(z.string().min(1)).min(1) }),
+  z.object({ tipo: z.literal('RELINQUISH_OWNERSHIP') }),
+  z.object({
+    tipo: z.literal('WIPE'),
+    patrimonioConfirmacao: z.string().min(1),
+    motivo: z.string().min(20, 'motivo precisa de pelo menos 20 caracteres'),
+  }),
+]);
+
+// Gap da spec (nem a seção 5 nem a lista de permissões de
+// `src/domain/auth/permissions.ts` cobrem `RELINQUISH_OWNERSHIP`): tratado
+// como `ADMIN`-only, mesmo nível de `WIPE` — as duas são ações que tiram o
+// device do controle da gestão de forma pouco reversível.
+const TIPOS_SOMENTE_ADMIN = new Set<string>(['WIPE', 'RELINQUISH_OWNERSHIP']);
+
+// Desligado em teste: a suíte de integração emite dezenas de comandos em
+// segundos contra a mesma rota (não é tráfego real disparando LOCK/WIPE em
+// loop, é a própria cobertura de teste) — sem isso, o rate limit real
+// (10/min, seção 11) derrubaria os próprios testes com 429.
+const RATE_LIMIT_COMANDOS =
+  env.NODE_ENV === 'test' ? false : { max: 10, timeWindow: '1 minute' as const };
+
+// Nunca persistir dado sensível no histórico (`comandos.payload`, visível
+// via `GET /devices/:id/comandos` pra VIEWER/TECNICO/ADMIN) — `novaSenha`
+// fica de fora de propósito, mesmo sendo o campo mais óbvio de "logar pra
+// auditoria".
+function payloadParaHistorico(
+  body: z.infer<typeof emitirComandoBodySchema>,
+): Record<string, unknown> | undefined {
+  if (body.tipo === 'CLEAR_APP_DATA') return { pacotes: body.pacotes };
+  if (body.tipo === 'WIPE') return { motivo: body.motivo };
+  return undefined;
+}
 
 // ADR-004 (confirmado com o Victor em 2026-09-04): `AUDITOR` não acessa
 // NENHUMA rota sob `/devices/*`, nem as de leitura — inclusive
@@ -124,7 +172,6 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   );
 
   // --- GET /devices/:id/comandos ---------------------------------------------
-  // Só leitura do histórico — emitir comando é `POST` na Fase 5.
   zodApp.get(
     '/devices/:id/comandos',
     {
@@ -137,6 +184,109 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         return sendProblem(reply, 404, 'Dispositivo não encontrado', undefined);
       }
       return reply.send(await listarComandosDoDispositivo(dispositivo.id, request.query.limit));
+    },
+  );
+
+  // --- POST /devices/:id/comandos -----------------------------------------------
+  // Emissão de verdade contra a AMAPI (Fase 5). Rate limit mais apertado que
+  // o global (seção 11 pede limite específico nas rotas de comando) — evita
+  // um script/bug disparando LOCK/WIPE em loop contra a frota inteira.
+  zodApp.post(
+    '/devices/:id/comandos',
+    {
+      ...withRole('TECNICO', 'ADMIN'),
+      config: { ...withRole('TECNICO', 'ADMIN').config, rateLimit: RATE_LIMIT_COMANDOS },
+      schema: { params: paramsIdSchema, body: emitirComandoBodySchema },
+    },
+    async (request, reply) => {
+      if (TIPOS_SOMENTE_ADMIN.has(request.body.tipo) && request.user!.role !== 'ADMIN') {
+        return sendProblem(
+          reply,
+          403,
+          'Acesso negado',
+          `O comando ${request.body.tipo} exige o papel ADMIN.`,
+        );
+      }
+
+      const dispositivo = await buscarDispositivoPorId(request.params.id);
+      if (!dispositivo) {
+        return sendProblem(reply, 404, 'Dispositivo não encontrado', undefined);
+      }
+
+      if (
+        request.body.tipo === 'WIPE' &&
+        request.body.patrimonioConfirmacao !== dispositivo.patrimonio
+      ) {
+        return sendProblem(
+          reply,
+          422,
+          'Confirmação inválida',
+          'O patrimônio informado não confere com o do dispositivo — dupla confirmação obrigatória pra WIPE.',
+        );
+      }
+
+      const ator = { id: request.user!.sub, email: request.user!.email };
+      const [comando] = await db
+        .insert(comandos)
+        .values({
+          dispositivoId: dispositivo.id,
+          tipo: request.body.tipo,
+          payload: payloadParaHistorico(request.body),
+          status: 'PENDENTE',
+          solicitadoPor: ator.id,
+        })
+        .returning();
+      if (!comando) throw new Error('falha ao criar comando — insert não retornou linha');
+
+      try {
+        if (request.body.tipo === 'WIPE') {
+          // `devices.delete` é síncrono do nosso ponto de vista — não existe
+          // `Operation` assíncrona pra correlacionar depois via Pub/Sub
+          // (diferente dos outros 5 tipos, `issueCommand`).
+          await emitirWipe(dispositivo.amapiName, { wipeReasonMessage: request.body.motivo });
+          await db
+            .update(comandos)
+            .set({ status: 'SUCESSO', concluidoEm: new Date() })
+            .where(eq(comandos.id, comando.id));
+        } else {
+          const emitido = await emitirComando(dispositivo.amapiName, request.body.tipo, {
+            novaSenha: request.body.tipo === 'RESET_PASSWORD' ? request.body.novaSenha : undefined,
+            pacotes: request.body.tipo === 'CLEAR_APP_DATA' ? request.body.pacotes : undefined,
+          });
+          // `ENVIADO`, não `SUCESSO` — o resultado final só chega depois,
+          // via evento `COMMAND` do Pub/Sub (`src/domain/eventos/handlers/
+          // command.ts`, Fase 5), correlacionado por `amapiOperationName`.
+          await db
+            .update(comandos)
+            .set({ status: 'ENVIADO', amapiOperationName: emitido.nomeOperacao })
+            .where(eq(comandos.id, comando.id));
+        }
+      } catch (erro) {
+        const mensagem = erro instanceof Error ? erro.message : String(erro);
+        await db
+          .update(comandos)
+          .set({ status: 'FALHA', erro: mensagem })
+          .where(eq(comandos.id, comando.id));
+        logger.error({ err: erro, comandoId: comando.id }, 'falha ao emitir comando na AMAPI');
+        return sendProblem(reply, 502, 'Falha ao emitir comando na AMAPI', mensagem);
+      }
+
+      await registrarAuditoria(db, {
+        ator,
+        acao: 'COMANDO_EMITIDO',
+        entidade: 'dispositivo',
+        entidadeId: dispositivo.id,
+        detalhes: { comandoId: comando.id, tipo: request.body.tipo },
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      const [comandoFinal] = await db
+        .select()
+        .from(comandos)
+        .where(eq(comandos.id, comando.id))
+        .limit(1);
+      return reply.status(201).send(comandoFinal);
     },
   );
 

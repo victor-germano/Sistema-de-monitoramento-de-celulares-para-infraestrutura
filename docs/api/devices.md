@@ -88,7 +88,7 @@ Body — todos os campos opcionais, só os enviados são alterados:
 Grava auditoria (`DISPOSITIVO_VINCULO_ALTERADO`, visível em `GET /devices/:id/auditoria`). `404` se o dispositivo não existir.
 
 > **Nota sobre `ativo`:** é só uma sinalização nossa (ADR-018) — desativar aqui **não** desprovisiona nem revoga
-> nada na AMAPI. Isso continua exigindo uma ação explícita (comando de wipe, Fase 5).
+> nada na AMAPI. Isso continua exigindo uma ação explícita (comando de wipe — ver [comandos.md](./comandos.md)).
 
 ### `GET /devices/:id/apps`
 
@@ -112,8 +112,8 @@ chegar. `installType` fica sempre vazio aqui — ver nota abaixo.
 
 ### `GET /devices/:id/comandos`
 
-Histórico de comandos emitidos para o dispositivo (mais recente primeiro). **Sempre vazio nesta fase** — emitir
-comando (`POST`) é escopo da Fase 5. Aceita `?limit=` (1–200, padrão 50).
+Histórico de comandos emitidos para o dispositivo (mais recente primeiro). Aceita `?limit=`
+(1–200, padrão 50). Emissão (`POST`) documentada separado em [comandos.md](./comandos.md).
 
 ### `GET /devices/:id/auditoria`
 

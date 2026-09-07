@@ -532,3 +532,84 @@ deliberada de velocidade por determinismo. Em CI (runners Linux hospedados, sem 
 WSL2 e com uma API Docker nativa, não emulada) esse overhead de orquestração tende a ser bem
 menor; se o tempo de CI incomodar, vale medir lá antes de reintroduzir paralelismo — não
 assumir que o mesmo gargalo desta máquina Windows se repete.
+
+---
+
+## ADR-022 — Escrita de política síncrona do ponto de vista da rota (`QueueEvents`)
+
+**Contexto:** a Fase 3 deixou a fila serializada (`src/queues/policy-write-queue.ts`,
+concorrência 1) pronta como biblioteca, mas nada nunca a consumia de verdade — nem rota HTTP
+enfileirava, nem worker processava. A Fase 5 precisa que `POST`/`PATCH /policies` respondam
+com o resultado real da escrita (payload corrigido pela AMAPI, ou o erro dela) — enfileirar e
+responder 202 "aceito" sem saber se deu certo obrigaria o frontend a ficar consultando um
+status à parte, sem necessidade nenhuma pra um painel administrativo de baixo tráfego.
+
+**Decisão:** `executarEscritaPoliticaSincrona` (`policy-write-queue.ts`) enfileira o job e usa
+`QueueEvents`/`job.waitUntilFinished(...)` (BullMQ) pra aguardar o resultado antes da rota
+responder — terceira conexão Redis dedicada, mesmo princípio de isolamento das outras duas
+(producer/worker) já usadas na fila. Um worker dedicado novo,
+`src/workers/policy-write-worker.ts` (`npm run worker:policy-write`), é quem de fato chama
+`salvarPolitica` — a rota HTTP nunca chama o adapter AMAPI direto, só enfileira.
+
+**Consequência:** a API HTTP agora depende de um processo worker de pé pra qualquer escrita de
+política funcionar (documentado em `docs/SETUP.md`) — sem ele, `waitUntilFinished` expira
+(timeout de 30s) e a rota devolve 502. Concorrência 1 continua garantida mesmo com múltiplos
+processos de API atrás de um load balancer, porque todos enfileiram na mesma fila Redis.
+
+---
+
+## ADR-023 — `POST /policies` desfaz o INSERT local quando a AMAPI recusa o payload
+
+**Contexto:** achado durante o próprio teste de integração da fase: o fluxo de criação insere
+a política localmente PRIMEIRO (pra ter um `id` e montar o `amapiName`), só depois tenta
+enviar pra AMAPI. Sem tratamento, uma falha da AMAPI (ex.: payload rejeitado com 400) deixava
+uma linha "fantasma" em `politicas` — sem `amapiName`, sem nenhuma versão em
+`politicas_versoes` — que `PATCH`/`DELETE` não sabem tratar corretamente.
+
+**Decisão:** no `catch` do envio à AMAPI, a rota apaga a linha recém-inserida
+(`db.delete(politicas).where(...)`) antes de responder 502. Seguro porque nenhuma
+`politicas_versoes` ainda foi gravada nesse ponto — não sobra histórico órfão.
+
+**Consequência:** uma política só existe localmente quando existe nos dois lados (nosso banco
+E a AMAPI) — nunca um meio-termo inconsistente. Se a criação falhar, o cliente da API recebe
+502 e pode simplesmente tentar de novo (o nome não ficou "reservado" por uma tentativa
+fracassada).
+
+---
+
+## ADR-024 — Dado sensível nunca persistido no histórico de comandos
+
+**Contexto:** `POST /devices/:id/comandos` (RESET_PASSWORD) recebe `novaSenha` no corpo da
+requisição. `comandos.payload` (jsonb) é visível via `GET /devices/:id/comandos` pra
+`VIEWER`/`TECNICO`/`ADMIN` — gravar a senha nova ali, mesmo que "só pra auditoria", criaria um
+texto puro de credencial num lugar lido por três papéis diferentes.
+
+**Decisão:** `payloadParaHistorico` (`src/modules/devices/devices.routes.ts`) é uma
+allowlist, não uma cópia do body — só grava o que cada tipo de comando precisa pra contexto
+futuro (`pacotes` em CLEAR_APP_DATA, `motivo` em WIPE); `novaSenha` nunca entra na lista.
+
+**Consequência:** o histórico de um comando RESET_PASSWORD não mostra qual foi a senha
+definida — se isso um dia for um requisito de auditoria de verdade, a resposta é integrar com
+um cofre de segredos dedicado, não gravar em texto puro numa coluna jsonb comum.
+
+---
+
+## ADR-025 — Gaps de RBAC resolvidos por extensão de padrão já confirmado
+
+**Contexto:** dois gaps que nem a seção 5 nem `src/domain/auth/permissions.ts` cobrem
+explicitamente: (1) qual papel pode emitir `RELINQUISH_OWNERSHIP` (a lista de permissões lista
+`dispositivos:comando:wipe` como `ADMIN`-only mas nunca menciona relinquish-ownership); (2)
+quem pode gerenciar `colaboradores`/`linhas` (a lista só menciona
+`colaboradores:vincular-dispositivo`/`linhas:vincular-dispositivo`, sobre VINCULAR a um
+device — não sobre CRUD do cadastro em si).
+
+**Decisão:** `RELINQUISH_OWNERSHIP` tratado como `ADMIN`-only, mesmo nível de `WIPE` — as duas
+tiram o device do controle da gestão de forma pouco reversível. CRUD de `colaboradores`/
+`linhas`: leitura pra `VIEWER`/`TECNICO`/`ADMIN`, escrita pra `TECNICO`/`ADMIN`, `AUDITOR` de
+fora dos dois — extensão direta da mesma filosofia do ADR-004 (`AUDITOR` só enxerga
+`GET /auditoria`, nunca inventário/cadastro operacional).
+
+**Consequência:** resolvido por extensão de padrão já confirmado com o Victor (ADR-004), não
+por decisão nova e isolada — mas registrado aqui porque é uma interpretação, não um valor
+explícito da spec. Se o Victor discordar de algum dos dois no uso real, é um ajuste pontual de
+`withRole(...)`, não uma mudança estrutural.

@@ -20,6 +20,9 @@ import { registerAuthRoutes } from './modules/auth/auth.routes.ts';
 import { registerDeviceRoutes } from './modules/devices/devices.routes.ts';
 import { registerInternalRoutes } from './modules/internal/internal.routes.ts';
 import { registerAuditoriaRoutes } from './modules/auditoria/auditoria.routes.ts';
+import { registerPoliticaRoutes } from './modules/politicas/politicas.routes.ts';
+import { registerColaboradorRoutes } from './modules/colaboradores/colaboradores.routes.ts';
+import { registerLinhaRoutes } from './modules/linhas/linhas.routes.ts';
 
 // Fábrica em vez de instância no módulo top-level: os testes de integração
 // precisam construir a app DEPOIS de setar as env vars dos containers do
@@ -44,9 +47,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     credentials: true,
   });
   await app.register(cookie);
-  // Rate limit global conservador nesta fase (só /health e /auth/* existem).
-  // A seção 11 pede rate limit específico nas rotas de comando — esse
-  // limite mais apertado é configurado por rota a partir da Fase 5.
+  // Rate limit global conservador. `POST /devices/:id/comandos` (Fase 5)
+  // tem um limite adicional, mais apertado, configurado só naquela rota
+  // (`config.rateLimit`, seção 11) — os dois se aplicam juntos ali.
   await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
   await app.register(swagger, {
@@ -77,6 +80,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerDeviceRoutes(app);
   registerInternalRoutes(app);
   registerAuditoriaRoutes(app);
+  registerPoliticaRoutes(app);
+  registerColaboradorRoutes(app);
+  registerLinhaRoutes(app);
 
   return app;
 }

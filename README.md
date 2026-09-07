@@ -8,8 +8,8 @@ Este repositório é **só backend**. A interface é construída por outra equip
 documentação gerada em [`docs/`](./docs) (destaque para `docs/HANDOFF-FRONTEND.md` e
 `docs/openapi.json`, entregues na Fase 7).
 
-> Estado atual: **Fase 4 — Inventário e Pub/Sub** concluída. Ver `PROJECT_MEMORY.md` para o histórico
-> completo de decisões e o que falta.
+> Estado atual: **Fase 5 — Políticas, comandos e cadastros** concluída. Ver `PROJECT_MEMORY.md` para o
+> histórico completo de decisões e o que falta.
 
 ## Stack
 
@@ -59,25 +59,27 @@ npm run test:coverage
 
 ## Scripts úteis
 
-| Comando                     | O que faz                                 |
-| --------------------------- | ----------------------------------------- |
-| `npm run dev`               | API em watch mode (tsx)                   |
-| `npm run worker:pubsub`     | Consumer Pub/Sub em watch mode (Fase 4)   |
-| `npm run build`             | Compila para `dist/`                      |
-| `npm run typecheck`         | `tsc --noEmit`, inclui `test/`            |
-| `npm run lint` / `lint:fix` | ESLint                                    |
-| `npm run format`            | Prettier                                  |
-| `npm run db:generate`       | Gera migration a partir do schema Drizzle |
-| `npm run db:migrate`        | Aplica migrations pendentes               |
-| `npm run db:studio`         | UI do Drizzle Studio                      |
-| `npm run db:seed`           | Semeia as políticas padrão (idempotente)  |
+| Comando                       | O que faz                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `npm run dev`                 | API em watch mode (tsx)                                                                              |
+| `npm run worker:pubsub`       | Consumer Pub/Sub em watch mode (Fase 4)                                                              |
+| `npm run worker:policy-write` | Worker da fila de escrita de política (Fase 5) — necessário pra `POST`/`PATCH /policies` funcionarem |
+| `npm run build`               | Compila para `dist/`                                                                                 |
+| `npm run typecheck`           | `tsc --noEmit`, inclui `test/`                                                                       |
+| `npm run lint` / `lint:fix`   | ESLint                                                                                               |
+| `npm run format`              | Prettier                                                                                             |
+| `npm run db:generate`         | Gera migration a partir do schema Drizzle                                                            |
+| `npm run db:migrate`          | Aplica migrations pendentes                                                                          |
+| `npm run db:studio`           | UI do Drizzle Studio                                                                                 |
+| `npm run db:seed`             | Semeia as políticas padrão (idempotente)                                                             |
 
 ## Documentação
 
 - [`docs/DECISOES.md`](./docs/DECISOES.md) — ADRs de decisões técnicas tomadas fora da spec original.
 - [`docs/SETUP.md`](./docs/SETUP.md) — como reproduzir o ambiente do zero (GCP, env vars, primeiro enrollment).
 - [`docs/api/`](./docs/api/) — um markdown por tópico de API (pipeline Pub/Sub, `/devices`, `/internal`,
-  `/auditoria`), pensado pra quem vai construir a interface sem ler o código.
+  `/auditoria`, `/policies`, comandos, `/colaboradores`/`/linhas`), pensado pra quem vai construir a
+  interface sem ler o código.
 - `PROJECT_MEMORY.md` (raiz) — memória viva do projeto: estado atual, pendências, histórico de solicitações.
 
 Os demais documentos (`ARQUITETURA.md`, `OPERACAO.md`, `LGPD.md`, `HANDOFF-FRONTEND.md`,

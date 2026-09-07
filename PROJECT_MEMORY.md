@@ -79,10 +79,21 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 - **ADR-021:** suíte de testes serial (`fileParallelism: false`) — paralelismo, mesmo
   limitado por thread, gerava overhead de orquestração do Testcontainers grande demais pro
   Docker Desktop desta máquina (não é falta de memória do container em si).
+- **ADR-022:** escrita de política é síncrona do ponto de vista da rota
+  (`executarEscritaPoliticaSincrona`, `QueueEvents`/`waitUntilFinished`) — a rota HTTP
+  enfileira e espera o resultado; um worker dedicado novo (`worker:policy-write`) é quem
+  chama `salvarPolitica` de verdade.
+- **ADR-023:** `POST /policies` desfaz o INSERT local quando a AMAPI recusa o payload — nunca
+  fica uma linha "fantasma" sem `amapiName`.
+- **ADR-024:** dado sensível (`novaSenha` do RESET_PASSWORD) nunca é persistido em
+  `comandos.payload` — histórico de comando usa allowlist, não cópia do body.
+- **ADR-025:** dois gaps de RBAC não cobertos pela spec, resolvidos por extensão do padrão já
+  confirmado (ADR-004): `RELINQUISH_OWNERSHIP` é `ADMIN`-only (mesmo nível de `WIPE`); CRUD de
+  `colaboradores`/`linhas` segue leitura `VIEWER+`/escrita `TECNICO+`/`AUDITOR` de fora.
 
 ## Estado atual
 
-**Fase 4 — Inventário e Pub/Sub: concluída.**
+**Fase 5 — Políticas, comandos e cadastros: concluída.**
 
 O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente abaixo):
 
@@ -157,51 +168,79 @@ O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente 
   reprocessamento manual de eventos falhos e reconciliação completa contra a AMAPI.
 - Documentação por tópico pra quem for construir a interface: `docs/api/{pubsub-pipeline,
 devices,internal,auditoria}.md`.
-- 200+ testes (unitários + integração com Testcontainers reais) — ver números exatos na
-  entrada de histórico desta fase, abaixo.
+- 200 testes (unitários + integração com Testcontainers reais) — cobertura completa na Fase 4.
 
-Ainda não existe (por fase futura): CRUD de políticas, rotas de comandos/colaboradores/linhas
-(o adapter e a fila existem como biblioteca interna, sem rota ainda), alertas além de
-`APP_OBRIGATORIO_AUSENTE` (os outros 8 tipos da seção 9 são Fase 6), dashboards, documentação
-de handoff. `client.ts`/o consumer nunca foram exercitados contra a AMAPI/Pub/Sub reais (sem
+**Fase 5 — Políticas, comandos e cadastros**, adicionado a tudo acima:
+
+- **CRUD de políticas** (`src/modules/politicas/politicas.routes.ts`) —
+  `GET/POST/PATCH/DELETE /policies`, `GET /policies/:id/versoes`, `POST /policies/:id/rollback`.
+  Toda escrita passa por `enforceInvariants` (auditando overrides via
+  `POLITICA_INVARIANT_OVERRIDE` quando algo é corrigido) e pela fila serializada, agora
+  **de fato conectada** a um worker dedicado (`npm run worker:policy-write`, ADR-022) — a Fase
+  3 tinha deixado fila e adapter prontos, mas nada os usava até agora. `DELETE` é soft
+  (`ativa: false`, nunca apaga — preserva `politicas_versoes`); `POST` desfaz o INSERT local se
+  a AMAPI recusar o payload (ADR-023). Só `ADMIN` escreve.
+- **`POST /devices/:id/comandos`** (`src/modules/devices/devices.routes.ts`) — emissão de
+  verdade dos 6 tipos (LOCK/REBOOT/RESET_PASSWORD/CLEAR_APP_DATA/RELINQUISH_OWNERSHIP/WIPE).
+  `WIPE` exige dupla confirmação (patrimônio + motivo ≥ 20 caracteres) e é `ADMIN`-only, junto
+  com `RELINQUISH_OWNERSHIP` (gap de RBAC resolvido por extensão de padrão, ADR-025). Dado
+  sensível (`novaSenha`) nunca é persistido no histórico (ADR-024). Rate limit de 10/min
+  específico da rota (seção 11), desligado em ambiente de teste.
+- **Handler `COMMAND`** (`src/domain/eventos/handlers/command.ts`) — fecha o ciclo assíncrono
+  dos comandos: correlaciona a `Operation` da AMAPI por `amapiOperationName`, marca
+  `SUCESSO`/`FALHA` só quando `done: true`. Registrado no dispatcher do Pub/Sub
+  (`processar-evento.ts`), que ficou "sem handler" pra este tipo desde a Fase 4.
+- **CRUD de colaboradores** (`src/modules/colaboradores/`) e **linhas**
+  (`src/modules/linhas/`) — cadastro organizacional completo (seção 6), paginação por cursor,
+  `AUDITOR` de fora dos dois (ADR-025).
+- Documentação por tópico nova: `docs/api/{politicas,comandos,colaboradores-e-linhas}.md`.
+- 241 testes (unitários + integração com Testcontainers reais), cobertura 92,75%
+  statements/lines, 97,05% functions, 81,49% branches; 100% mantido em `src/plugins/rbac.ts`,
+  `src/domain/policy/policy-invariants.ts` **e** `src/integrations/amapi/mappers.ts`.
+
+Ainda não existe (por fase futura): alertas além de `APP_OBRIGATORIO_AUSENTE` (os outros 8
+tipos da seção 9 são Fase 6), dashboards, documentação de handoff. `client.ts`/o consumer/o
+adapter de comandos nunca foram exercitados contra a AMAPI/Pub/Sub reais (sem
 enterprise/subscription reais — ADR-005); testados mockando a fronteira de rede.
 
-## Pendências conhecidas (bloqueiam fases específicas, não a Fase 4)
+## Pendências conhecidas (bloqueiam fases específicas, não a Fase 5)
 
-| Pendência                                                                                  | Bloqueia                                             | Situação                                                                                          |
-| ------------------------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Nome real da enterprise AMAPI (`enterprises/LC...`)                                        | Teste E2E real contra a AMAPI e o Pub/Sub            | Placeholder no `.env.example`; empresa vai confirmar                                              |
-| Nome do tópico/subscription Pub/Sub                                                        | Idem — consumer só roda contra evento sintético hoje | Arquivado — depende de conversa com equipe de frontend/infra                                      |
-| Valores exatos do enum `MemoryEventType` (bateria/storage)                                 | Precisão de `bateriaPct`/`storageLivreMb`            | ADR-019 — heurística tolerante até validar contra device real                                     |
-| Lista de filiais existentes                                                                | Seed de dashboards/relatórios (Fase 6)               | Arquivado — mesma conversa acima                                                                  |
-| Versão mínima de Android                                                                   | Alerta `SO_OBSOLETO` (Fase 6)                        | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                           |
-| Lista fechada de operadoras                                                                | `linhas.operadora`                                   | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral" |
-| Diferenciação entre políticas `administrativo`/`operacao-campo` e lista de apps por perfil | CRUD de políticas (Fase 5)                           | Seed nasce com payload idêntico nas duas — ADR-016, decisão de negócio pendente                   |
+| Pendência                                                                                  | Bloqueia                                             | Situação                                                                                                                   |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Nome real da enterprise AMAPI (`enterprises/LC...`)                                        | Teste E2E real contra a AMAPI e o Pub/Sub            | Placeholder no `.env.example`; empresa vai confirmar                                                                       |
+| Nome do tópico/subscription Pub/Sub                                                        | Idem — consumer só roda contra evento sintético hoje | Arquivado — depende de conversa com equipe de frontend/infra                                                               |
+| Valores exatos do enum `MemoryEventType` (bateria/storage)                                 | Precisão de `bateriaPct`/`storageLivreMb`            | ADR-019 — heurística tolerante até validar contra device real                                                              |
+| Lista de filiais existentes                                                                | Seed de dashboards/relatórios (Fase 6)               | Arquivado — mesma conversa acima                                                                                           |
+| Versão mínima de Android                                                                   | Alerta `SO_OBSOLETO` (Fase 6)                        | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                                                    |
+| Lista fechada de operadoras                                                                | `linhas.operadora`                                   | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral"                          |
+| Diferenciação entre políticas `administrativo`/`operacao-campo` e lista de apps por perfil | CRUD de políticas                                    | Seed nasce com payload idêntico nas duas — ADR-016, decisão de negócio pendente (agora editável via `PATCH /policies/:id`) |
 
 ## Problemas conhecidos
 
-Nenhum em aberto no código. Um foi corrigido durante a Fase 2 (ADR-008, `REVOKE` não bloqueia
-dono da tabela), outro durante a Fase 3 (ADR-015, `uninstallBlocked` não existe na AMAPI
-atual), e durante a Fase 4:
+Nenhum em aberto no código. Um foi corrigido durante a Fase 2 (ADR-008), outro durante a Fase
+3 (ADR-015), dois durante a Fase 4 (RBAC do `AUDITOR`, ADR-004; infra de teste, ADR-021), e
+dois durante a Fase 5 — os dois achados e corrigidos pela própria suíte de testes, antes de
+fechar a fase:
 
-- **RBAC:** `devices.routes.ts` foi escrito inicialmente liberando leitura pro papel
-  `AUDITOR` — contradizia o ADR-004, já confirmado com o Victor desde 2026-09-04. Encontrado e
-  corrigido antes de fechar a fase, com o efeito colateral positivo de criar o endpoint que
-  faltava pro `AUDITOR` ter algum acesso de verdade (`GET /auditoria`).
-- **Infra de teste (não é bug de produto):** com 10+ arquivos de integração via
-  Testcontainers, o paralelismo padrão do Vitest sobrecarregava o Docker Desktop desta
-  máquina (Windows/WSL2) — corrigido com suíte serial (ADR-021). Nenhum impacto no
-  comportamento da aplicação, só no tempo/estabilidade de rodar os testes localmente.
+- **Linha "fantasma" em `politicas`:** `POST /policies` inseria a política local ANTES de
+  saber se a AMAPI aceitaria o payload; uma falha da AMAPI deixava uma linha sem `amapiName`
+  pra trás. Corrigido desfazendo o INSERT no `catch` (ADR-023).
+- **`UNDEFINED_VALUE` no driver Postgres:** o handler `COMMAND` gravava `erro: undefined`
+  (em vez de `null`) quando não havia erro — o driver `postgres` rejeita `undefined` como
+  parâmetro de bind. Corrigido usando `null`, que é o valor correto pra "sem erro" numa coluna
+  nullable.
 
 ## Próximo passo
 
-Fase 5 — CRUD de políticas (rotas HTTP em cima do adapter/fila que já existem como biblioteca
-interna desde a Fase 3), comandos (`POST /devices/:id/comandos`, emissão de verdade contra a
-AMAPI), rotas de colaboradores/linhas. **Aguardando OK do Victor para começar.**
+Fase 6 — Motor de alertas (os 8 tipos restantes da seção 9: `SEM_CHECKIN`, `NAO_CONFORME`,
+`PATCH_DESATUALIZADO`, `SO_OBSOLETO`, `STORAGE_CRITICO`, `DISPOSITIVO_ORFAO`, `LINHA_SEM_USO`,
+`BATERIA_DEGRADADA`), dashboards/relatórios, LGPD (retenção, `COLETA_LOCALIZACAO_ATIVA`).
+**Aguardando OK do Victor para começar.**
 
-Vale resolver antes ou durante a Fase 5, sem bloquear o início: nome do tópico/subscription
-Pub/Sub e da enterprise AMAPI (ADR-005) — sem eles, o consumer da Fase 4 continua rodando só
-contra evento sintético em teste, nunca contra tráfego real.
+Vale resolver antes ou durante a Fase 6, sem bloquear o início: lista de filiais e versão
+mínima de Android (bloqueiam só a precisão de `SO_OBSOLETO`/relatórios, não o motor de
+alertas em si); nome do tópico/subscription Pub/Sub e da enterprise AMAPI (ADR-005) seguem
+pendentes desde a Fase 4.
 
 ---
 
@@ -534,3 +573,65 @@ conhecidos" acima (RBAC do `AUDITOR` corrigido, ADR-004; infra de teste ajustada
 
 **Pendências futuras:** ver tabela "Pendências conhecidas" acima. Nenhuma bloqueia o início
 da Fase 5.
+
+---
+
+### 2026-09-07 — Fase 5: Políticas, comandos e cadastros
+
+**Solicitação original:** "prossiga para a fase 5".
+
+**Status:** Concluída.
+
+**O que foi realizado:**
+
+- CRUD de políticas completo, finalmente conectando a fila serializada e o adapter que a Fase
+  3 tinha deixado prontos como biblioteca — nada os usava até agora (ADR-022, worker dedicado
+  novo).
+- `POST /devices/:id/comandos` — emissão de verdade dos 6 tipos de comando, com dupla
+  confirmação pro `WIPE` e RBAC extra por tipo (`ADMIN`-only pra `WIPE`/`RELINQUISH_OWNERSHIP`,
+  gap de spec resolvido por extensão do ADR-004 — ver ADR-025).
+- Handler `COMMAND` do Pub/Sub, fechando o ciclo assíncrono que a Fase 4 deixou "sem handler"
+  de propósito.
+- CRUD de colaboradores e linhas.
+- 3 novos documentos de API por tópico, atendendo pedido explícito do Victor ("a cada tópico,
+  faça um markdown") — retomado desta mesma instrução, dada durante o fechamento da Fase 4.
+
+**Arquivos criados:** `src/modules/{politicas/politicas.routes,colaboradores/colaboradores.routes,linhas/linhas.routes}.ts`;
+`src/domain/{colaboradores,linhas}/repositorio.ts`; `src/domain/eventos/handlers/command.ts`;
+`src/workers/policy-write-worker.ts`;
+`test/integration/{politicas-routes,comandos-devices,colaboradores-linhas-routes}.test.ts`;
+`docs/api/{politicas,comandos,colaboradores-e-linhas}.md`.
+
+**Arquivos alterados:** `src/queues/policy-write-queue.ts` (`QueueEvents`,
+`executarEscritaPoliticaSincrona`, ADR-022), `src/domain/eventos/processar-evento.ts`
+(handler `COMMAND` registrado, `resource` generalizado pra `unknown`), `src/modules/devices/
+devices.routes.ts` (`POST /devices/:id/comandos`), `src/app.ts` (registro das 3 rotas novas),
+`package.json` (script `worker:policy-write`), `README.md`/`docs/api/{README,devices}.md`,
+`docs/DECISOES.md` (ADR-022 a ADR-025).
+
+**Arquivos removidos:** nenhum.
+
+**Funcionalidades afetadas:** nenhuma das Fases 1–4 — só adição.
+
+**Decisões técnicas tomadas:** ADR-022 a ADR-025 (ver "Decisões técnicas tomadas" acima).
+
+**Impacto da alteração:** nenhuma regressão — Fases 1–4 revalidadas junto de cada rodada de
+testes desta fase.
+
+**Validação realizada:**
+
+- `npm run typecheck`/`lint`/`build`/`format:check` — limpos.
+- `npm test` — 241/241 passando (26 arquivos).
+- `npm run test:coverage` — 92,75% statements/lines, 97,05% functions, 81,49% branches; 100%
+  mantido em `src/plugins/rbac.ts`, `src/domain/policy/policy-invariants.ts` **e**
+  `src/integrations/amapi/mappers.ts`.
+- Achei e corrigi 2 bugs reais durante a própria escrita dos testes de integração — ver
+  "Problemas conhecidos" acima (linha fantasma em `politicas`; `UNDEFINED_VALUE` no handler
+  `COMMAND`). Nos dois casos o bug só apareceu porque o teste exercitou o caminho de falha de
+  verdade (AMAPI simulada recusando payload; `Operation` sem erro), não só o caminho feliz.
+
+**Problemas encontrados:** dois, ambos corrigidos antes de fechar a fase — ver "Problemas
+conhecidos" acima.
+
+**Pendências futuras:** ver tabela "Pendências conhecidas" acima. Nenhuma bloqueia o início
+da Fase 6.
