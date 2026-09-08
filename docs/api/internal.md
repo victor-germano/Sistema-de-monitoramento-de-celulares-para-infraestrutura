@@ -59,3 +59,31 @@ Auditoria (`SYNC_DEVICES_FULL`) registra o resumo.
 
 > **Pode demorar.** Não tem paginação de resposta — a rota só devolve quando processar a frota inteira.
 > Rodar via job/CLI administrativo, não a partir de uma tela esperando resposta síncrona.
+
+## `POST /internal/alertas/verificar` (Fase 6)
+
+Dispara na hora os 3 scans periódicos que `npm run worker:manutencao` roda sozinho a cada
+`ALERTA_SCAN_INTERVALO_HORAS` (default 6h) — ver [alertas.md](./alertas.md). Sem body.
+
+```jsonc
+{
+  "semCheckin": { "candidatos": 12, "abertos": 2, "resolvidos": 1 },
+  "dispositivosOrfaos": { "candidatos": 3, "abertos": 1, "resolvidos": 0 },
+  "linhasSemUso": { "candidatos": 5, "abertos": 0, "resolvidos": 2 },
+}
+```
+
+`abertos`/`resolvidos` contam só o que MUDOU nesta rodada — um dispositivo já alertado
+continua "candidato" mas não soma em `abertos` de novo.
+
+## `POST /internal/lgpd/purgar` (Fase 6)
+
+Purga `eventos_brutos` processados com sucesso há mais de `RETENCAO_EVENTOS_BRUTOS_DIAS`
+(default 180 dias) — nunca eventos com erro (ficam disponíveis pro replay até alguém
+investigar). Sem body.
+
+```jsonc
+{ "eventosBrutosPurgados": 431 }
+```
+
+Roda sozinho no mesmo ciclo do `worker:manutencao`; esta rota só antecipa manualmente.

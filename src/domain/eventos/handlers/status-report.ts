@@ -1,8 +1,9 @@
-// Handler do `notificationType: 'STATUS_REPORT'` (seção 8, Fase 4) — device
-// já provisionado reportando estado atual. Ao contrário do ENROLLMENT, não
-// cria nada: só atualiza o que já existe e detecta o alerta
-// `APP_OBRIGATORIO_AUSENTE` (único alerta cujo gatilho pertence à Fase 4;
-// os outros 8 tipos do enum são Fase 6, seção 9).
+// Handler do `notificationType: 'STATUS_REPORT'` (seção 8) — device já
+// provisionado reportando estado atual. Ao contrário do ENROLLMENT, não cria
+// nada: só atualiza o que já existe e roda os 6 alertas "reativos" que só
+// fazem sentido com o dado que acabou de chegar — `APP_OBRIGATORIO_AUSENTE`
+// (Fase 4) e os 5 do motor de alertas (Fase 6, `src/domain/alertas/motor.ts`;
+// os outros 3 tipos da seção 9 são scan periódico, não reativo).
 import { eq } from 'drizzle-orm';
 import type { androidmanagement_v1 } from 'googleapis';
 import type { db } from '../../../db/client.ts';
@@ -12,7 +13,8 @@ import {
   upsertDispositivoApps,
   listarAppsDoDispositivo,
 } from '../../dispositivos/repositorio.ts';
-import { abrirAlertaSeNaoExistir } from '../../alertas/repositorio.ts';
+import { abrirAlertaSeNaoExistir, resolverAlertaSeAberto } from '../../alertas/repositorio.ts';
+import { verificarAlertasReativos } from '../../alertas/motor.ts';
 import {
   mapearCamposDispositivo,
   mapearAppsDoDispositivo,
@@ -91,6 +93,8 @@ export async function processarStatusReport(tx: Tx, device: Device): Promise<voi
     await verificarAppsObrigatorios(tx, dispositivo.id, dispositivo.politicaId);
   }
 
+  await verificarAlertasReativos(tx, dispositivo);
+
   logger.info(
     { dispositivoId: dispositivo.id, amapiName: device.name, apps: appsReportados.length },
     'STATUS_REPORT: dispositivo atualizado',
@@ -113,7 +117,10 @@ async function verificarAppsObrigatorios(
   );
   const ausentes = obrigatorios.filter((pkg) => !instalados.has(pkg));
 
-  if (ausentes.length === 0) return;
+  if (ausentes.length === 0) {
+    await resolverAlertaSeAberto(tx, dispositivoId, 'APP_OBRIGATORIO_AUSENTE');
+    return;
+  }
 
   await abrirAlertaSeNaoExistir(tx, {
     dispositivoId,

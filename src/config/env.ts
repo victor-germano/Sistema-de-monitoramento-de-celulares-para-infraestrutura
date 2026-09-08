@@ -70,6 +70,36 @@ export const envSchema = z.object({
   // já provisionados, nunca criados em runtime).
   GOOGLE_CLOUD_PROJECT: z.string().min(1),
   PUBSUB_SUBSCRIPTION: z.string().min(1),
+
+  // --- Motor de alertas (Fase 6) -----------------------------------------
+  // Nenhum destes limiares é pedido explicitamente pela spec (seção 9 só
+  // nomeia os 9 tipos) — são decisões nossas, documentadas em ADR-031,
+  // ajustáveis sem redeploy de código. `ANDROID_VERSAO_MINIMA_SDK` já
+  // existia desde a Fase 3/4 como documentação; passa a ser lida de verdade
+  // aqui (ver ADR-030 sobre como ela é comparada contra o dado real da AMAPI).
+  ANDROID_VERSAO_MINIMA_SDK: z.coerce.number().int().positive().default(30),
+  ALERTA_SEM_CHECKIN_DIAS: z.coerce.number().int().positive().default(3),
+  ALERTA_PATCH_MAX_DIAS: z.coerce.number().int().positive().default(90),
+  ALERTA_STORAGE_CRITICO_MB: z.coerce.number().int().nonnegative().default(500),
+  ALERTA_BATERIA_CRITICA_PCT: z.coerce.number().int().min(0).max(100).default(15),
+  ALERTA_DISPOSITIVO_ORFAO_DIAS: z.coerce.number().int().positive().default(7),
+  // Intervalo entre rodadas do scan periódico (`src/workers/manutencao-worker.ts`)
+  // — cobre os 3 tipos de alerta que dependem de AUSÊNCIA de atividade
+  // (SEM_CHECKIN/DISPOSITIVO_ORFAO/LINHA_SEM_USO), que nenhum evento reativo
+  // detecta sozinho.
+  ALERTA_SCAN_INTERVALO_HORAS: z.coerce.number().positive().default(6),
+  // Best-effort, opcional — vazio desliga a notificação (não a criação do
+  // alerta em si, que sempre acontece no banco independente disso).
+  ALERT_WEBHOOK_URL: z.string().default(''),
+
+  // --- LGPD / retenção (Fase 6) -------------------------------------------
+  // `RETENCAO_LOCALIZACAO_DIAS` continua só documentada em `.env.example`,
+  // não entra aqui: a AMAPI não relata localização de forma contínua via
+  // STATUS_REPORT (só via um recurso "Lost Mode" dedicado, fora de escopo
+  // desta fase por decisão do Victor — ver ADR-026) — nenhum código lê essa
+  // variável ainda, e declará-la como obrigatória sem uso violaria a regra
+  // do topo deste arquivo.
+  RETENCAO_EVENTOS_BRUTOS_DIAS: z.coerce.number().int().positive().default(180),
 });
 
 function splitList(value: string): string[] {

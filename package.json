@@ -11,6 +11,7 @@
     "dev": "tsx watch src/server.ts",
     "worker:pubsub": "tsx watch src/workers/pubsub-consumer.ts",
     "worker:policy-write": "tsx watch src/workers/policy-write-worker.ts",
+    "worker:manutencao": "tsx watch src/workers/manutencao-worker.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",

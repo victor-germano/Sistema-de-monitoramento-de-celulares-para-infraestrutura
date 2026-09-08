@@ -613,3 +613,124 @@ fora dos dois — extensão direta da mesma filosofia do ADR-004 (`AUDITOR` só 
 por decisão nova e isolada — mas registrado aqui porque é uma interpretação, não um valor
 explícito da spec. Se o Victor discordar de algum dos dois no uso real, é um ajuste pontual de
 `withRole(...)`, não uma mudança estrutural.
+
+---
+
+## ADR-026 — Localização fora de escopo na Fase 6 (AMAPI não coleta continuamente)
+
+**Contexto:** ao planejar a retenção LGPD (`COLETA_LOCALIZACAO_ATIVA`, `RETENCAO_LOCALIZACAO_
+DIAS`, ambas já documentadas em `.env.example` desde fases anteriores), fui conferir como a
+AMAPI de fato relata localização — e a resposta muda o escopo da feature. A AMAPI **não**
+relata localização de forma contínua/periódica via `STATUS_REPORT`. O único recurso que expõe
+coordenadas é `LostModeLocationEvent`, parte de `SECURITY_LOGS`/`USAGE_LOGS`, e só existe
+quando alguém explicitamente coloca o device em "Lost Mode" via um comando dedicado
+(`startLostMode`) — não é uma coleta de rastreamento contínua que dá pra ligar/desligar com
+uma flag geral, como `COLETA_LOCALIZACAO_ATIVA` sugere.
+
+**Decisão (perguntado ao Victor, que confirmou):** Fase 6 não implementa nenhuma coleta de
+localização de verdade nem os comandos `START_LOST_MODE`/`STOP_LOST_MODE`. `dispositivos.
+ultima_localizacao` continua existindo (seção 6) mas nunca é preenchida por nenhum handler.
+`COLETA_LOCALIZACAO_ATIVA` segue documentada só em `.env.example`, sem entrar em
+`src/config/env.ts` (nenhum código a lê ainda — regra do topo daquele arquivo).
+`RETENCAO_LOCALIZACAO_DIAS` idem — sem função até essa coluna passar a ser preenchida.
+
+**Consequência:** se um recurso de "encontrar device perdido" for pedido no futuro, é aditivo
+(dois comandos novos no enum `comando_tipo`, um handler de evento pro `LostModeLocationEvent`)
+— não uma correção do que já existe.
+
+---
+
+## ADR-027 — `alertas.dispositivo_id` nullable + `linha_id` novo (LINHA_SEM_USO)
+
+**Contexto:** a seção 6 define `alertas.dispositivo_id` como `NOT NULL` (todo alerta é sobre
+um dispositivo). A seção 9 lista `LINHA_SEM_USO` como um dos 9 tipos — mas por definição esse
+alerta é sobre uma LINHA sem NENHUM dispositivo usando ela; não existe um `dispositivo_id`
+sensato pra anexar. Schema (seção 6) e lista de tipos (seção 9) conflitam neste um ponto.
+
+**Decisão:** `dispositivo_id` passou a ser nullable; `linha_id` (nullable, FK pra `linhas`) foi
+adicionado. Um `CHECK` garante que exatamente um dos dois está preenchido (nunca os dois,
+nunca nenhum) — `drizzle/migrations/0004_alertas_linha_sem_uso.sql`. Um segundo índice único
+parcial (`alertas_linha_aberto_unico_idx`) replica pra `linha_id` a mesma garantia de "um
+alerta aberto por chave+tipo" que já existia pra `dispositivo_id` (ADR-020) — dois índices
+separados, não um composto, porque Postgres trata `NULL` como distinto de `NULL` em índice
+único (um índice composto `(dispositivo_id, linha_id, tipo)` não impediria duas linhas de
+`LINHA_SEM_USO` pra mesma linha).
+
+**Consequência:** `abrirAlertaSeNaoExistir` (`src/domain/alertas/repositorio.ts`) escolhe o
+índice certo (`target`) olhando se `linhaId` veio preenchido no input — o único lugar do
+código que precisa saber que existem dois "modos" de alerta.
+
+---
+
+## ADR-028 — `AUDITOR` ganha acesso a `GET /alertas` e `GET /dashboard`
+
+**Contexto:** ao contrário de `/devices/*`/`/colaboradores`/`/linhas` (ADR-004/ADR-025,
+`AUDITOR` de fora), a lista de permissões da seção 5 (`src/domain/auth/permissions.ts`, desde
+a Fase 2) já declara `compliance:ler` pro papel `AUDITOR` — uma permissão que não tinha
+nenhuma rota correspondente até agora. Boa parte dos 9 alertas (`NAO_CONFORME`,
+`PATCH_DESATUALIZADO`, `SO_OBSOLETO`) É literalmente sinal de compliance, não inventário
+operacional de dispositivo.
+
+**Decisão:** `GET /alertas`, `GET /alertas/:id` e `GET /dashboard` aceitam `AUDITOR` (além de
+`VIEWER`/`TECNICO`/`ADMIN`). Ações de escrita (`POST /alertas/:id/reconhecer`/`resolver`)
+continuam `TECNICO`/`ADMIN`-only — reconhecer/resolver é ação operacional, não leitura de
+compliance.
+
+**Consequência:** primeira rota que de fato usa a permissão `compliance:ler` declarada desde a
+Fase 2 — antes disso, `AUDITOR` só tinha `GET /auditoria` (`auditoria:ler`) de verdade.
+
+---
+
+## ADR-029 — `BATERIA_DEGRADADA` mede carga crítica, não degradação física
+
+**Contexto:** o nome do alerta (seção 9) sugere medir desgaste/saúde da bateria. A AMAPI não
+expõe isso: `Schema$PowerManagementEvent` (o único dado de bateria disponível) só tem
+`batteryLevel`, um percentual de CARGA no momento do evento — não existe campo de
+battery health/wear/capacity no schema atual da AMAPI.
+
+**Decisão:** interpretação adotada — "bateria criticamente baixa no último check-in"
+(`ALERTA_BATERIA_CRITICA_PCT`, default 15%) — o proxy mensurável mais próximo do nome do
+alerta que os dados disponíveis permitem, não uma medição real de degradação.
+
+**Consequência:** um device com bateria fisicamente degradada mas que está carregado no
+momento do `STATUS_REPORT` não dispara o alerta — a limitação é do dado de origem, não da
+lógica. Se "degradação de verdade" for um requisito real, exigiria um recurso da AMAPI que não
+existe hoje (ou heurística baseada em histórico de tempo-de-carga, fora de escopo).
+
+---
+
+## ADR-030 — `SO_OBSOLETO` compara versão "major" via tabela SDK→versão, não SDK direto
+
+**Contexto:** `ANDROID_VERSAO_MINIMA_SDK` (documentada desde a Fase 3) sugere comparar contra
+o nível de API (SDK) do device. A AMAPI não expõe isso — `SoftwareInfo.androidVersion` é a
+versão "visível ao usuário" (ex.: "13", "6.0.1"), não um inteiro de API level.
+
+**Decisão:** uma tabela fixa `SDK_PARA_VERSAO_MAJOR` (`src/domain/alertas/motor.ts`), cobrindo
+API 21–35, converte o SDK mínimo configurado pra uma versão major do Android; o device é
+comparado por essa versão major (primeiro número de `androidVersion`), não pelo SDK
+diretamente. SDK fora da tabela (config inválida) resolve pra `0` — nunca marca a frota
+inteira como obsoleta por um número de configuração errado.
+
+**Consequência:** precisão no nível de "major version", não de patch/minor — suficiente pro
+propósito do alerta (frota rodando Android muito antigo), não uma comparação de API level
+exata. Tabela precisa de uma entrada nova a cada Android major novo (baixa manutenção, uma
+linha por ano aproximadamente).
+
+---
+
+## ADR-031 — Limiares do motor de alertas são env vars com default, não valores fixos
+
+**Contexto:** a seção 9 nomeia os 9 tipos de alerta, mas nenhum limiar numérico (quantos dias
+sem check-in, quantos MB de storage, qual % de bateria, etc.) é especificado — decisão de
+negócio que ninguém definiu ainda, mesmo padrão do ADR-016 (seed de políticas).
+
+**Decisão:** cada limiar é uma env var com um default conservador, documentada em
+`src/config/env.ts`: `ALERTA_SEM_CHECKIN_DIAS` (3), `ALERTA_PATCH_MAX_DIAS` (90),
+`ALERTA_STORAGE_CRITICO_MB` (500), `ALERTA_BATERIA_CRITICA_PCT` (15),
+`ALERTA_DISPOSITIVO_ORFAO_DIAS` (7), `ALERTA_SCAN_INTERVALO_HORAS` (6, intervalo do scan
+periódico, não um limiar de alerta em si).
+
+**Consequência:** ajustável sem redeploy de código (só reiniciar com a env var nova). Valores
+atuais são palpites informados, não medição da operação real da empresa — revisar assim que
+houver dado real de uso (quantos alertas cada limiar gera por semana, se está barulhento
+demais ou silencioso demais).

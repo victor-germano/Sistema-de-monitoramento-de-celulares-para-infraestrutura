@@ -90,10 +90,22 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 - **ADR-025:** dois gaps de RBAC não cobertos pela spec, resolvidos por extensão do padrão já
   confirmado (ADR-004): `RELINQUISH_OWNERSHIP` é `ADMIN`-only (mesmo nível de `WIPE`); CRUD de
   `colaboradores`/`linhas` segue leitura `VIEWER+`/escrita `TECNICO+`/`AUDITOR` de fora.
+- **ADR-026:** localização fora de escopo na Fase 6 (perguntado ao Victor, que confirmou) — a
+  AMAPI não coleta localização continuamente, só via "Lost Mode" dedicado, não implementado.
+- **ADR-027:** `alertas.dispositivo_id` virou nullable + `linha_id` novo (com CHECK garantindo
+  exatamente um dos dois) — `LINHA_SEM_USO` (seção 9) não tem dispositivo por definição.
+- **ADR-028:** `AUDITOR` ganha acesso a `GET /alertas`/`GET /dashboard` — primeira rota a usar
+  a permissão `compliance:ler`, declarada desde a Fase 2 mas nunca antes exercida.
+- **ADR-029:** `BATERIA_DEGRADADA` mede carga crítica no momento do check-in, não degradação
+  física — a AMAPI não expõe saúde/desgaste de bateria, só percentual de carga.
+- **ADR-030:** `SO_OBSOLETO` compara versão "major" do Android via tabela SDK→versão — a AMAPI
+  não expõe nível de API (SDK) diretamente, só a versão "visível ao usuário".
+- **ADR-031:** limiares do motor de alertas (dias sem check-in, MB crítico, % de bateria etc.)
+  são env vars com default, não valores fixos — a seção 9 nomeia os tipos, não os números.
 
 ## Estado atual
 
-**Fase 5 — Políticas, comandos e cadastros: concluída.**
+**Fase 6 — Motor de alertas, dashboard e LGPD: concluída.**
 
 O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente abaixo):
 
@@ -198,49 +210,78 @@ devices,internal,auditoria}.md`.
   statements/lines, 97,05% functions, 81,49% branches; 100% mantido em `src/plugins/rbac.ts`,
   `src/domain/policy/policy-invariants.ts` **e** `src/integrations/amapi/mappers.ts`.
 
-Ainda não existe (por fase futura): alertas além de `APP_OBRIGATORIO_AUSENTE` (os outros 8
-tipos da seção 9 são Fase 6), dashboards, documentação de handoff. `client.ts`/o consumer/o
+**Fase 6 — Motor de alertas, dashboard e LGPD**, adicionado a tudo acima:
+
+- **Motor de alertas** (`src/domain/alertas/motor.ts`) — os 8 tipos restantes da seção 9 (o 9º,
+  `APP_OBRIGATORIO_AUSENTE`, já existia desde a Fase 4). Dividido em dois mecanismos: 5 tipos
+  **reativos** (`NAO_CONFORME`, `PATCH_DESATUALIZADO`, `SO_OBSOLETO`, `STORAGE_CRITICO`,
+  `BATERIA_DEGRADADA`) checados a cada `STATUS_REPORT`, abrindo OU resolvendo sozinhos; 3 tipos
+  **periódicos** (`SEM_CHECKIN`, `DISPOSITIVO_ORFAO`, `LINHA_SEM_USO`) via scan completo da
+  frota, sobre AUSÊNCIA de algo que nenhum evento reativo detecta. Todos os limiares são env
+  vars com default (ADR-031) — a spec não fixa nenhum número.
+- **`src/workers/manutencao-worker.ts`** (`npm run worker:manutencao`) — roda os 3 scans
+  periódicos + a purga LGPD a cada `ALERTA_SCAN_INTERVALO_HORAS` (default 6h).
+  `POST /internal/alertas/verificar` e `POST /internal/lgpd/purgar` (`ADMIN`) disparam ambos
+  manualmente, sem esperar o próximo ciclo.
+- **Duas divergências reais da AMAPI encontradas e documentadas ANTES de implementar** (regra
+  8 da spec): `BATERIA_DEGRADADA` na verdade mede carga crítica, não degradação física — a
+  AMAPI não expõe saúde de bateria (ADR-029). `SO_OBSOLETO` compara via uma tabela SDK→versão
+  major, porque a AMAPI só expõe a versão "visível ao usuário", não o nível de API (ADR-030).
+- **Gap de schema real encontrado**: `LINHA_SEM_USO` (seção 9) não tem dispositivo associado
+  por definição, mas `alertas.dispositivo_id` era `NOT NULL` (seção 6). Corrigido tornando o
+  campo nullable + `linha_id` novo, com `CHECK` garantindo exatamente um dos dois preenchido
+  (ADR-027).
+- **`GET /alertas`, `POST /alertas/:id/{reconhecer,resolver}`** — ciclo de vida manual. `GET
+/dashboard` — resumo agregado (contagens por compliance/alerta/linha). Os dois aceitam
+  `AUDITOR` — primeira vez que a permissão `compliance:ler` (declarada desde a Fase 2) é
+  exercida de verdade (ADR-028).
+- **LGPD**: perguntei ao Victor antes de implementar (regra 8) se a Fase 6 deveria adicionar
+  comandos de "Lost Mode" pra coleta de localização real — a AMAPI não coleta localização
+  continuamente como o esquema original supunha, só nesse recurso específico e pouco usado.
+  Confirmado deixar de fora (ADR-026): a fase só implementa a purga real que já é possível,
+  `eventos_brutos` antigos (`RETENCAO_EVENTOS_BRUTOS_DIAS`).
+- Documentação por tópico nova: `docs/api/{alertas,dashboard}.md`.
+- 281 testes (unitários + integração com Testcontainers reais), cobertura 92,57%
+  statements/lines, 96,29% functions, 81,65% branches; 100% mantido em `src/plugins/rbac.ts`,
+  `src/domain/policy/policy-invariants.ts` **e** `src/integrations/amapi/mappers.ts`.
+
+Ainda não existe (por fase futura): documentação de handoff (Fase 7). `client.ts`/o consumer/o
 adapter de comandos nunca foram exercitados contra a AMAPI/Pub/Sub reais (sem
-enterprise/subscription reais — ADR-005); testados mockando a fronteira de rede.
+enterprise/subscription reais — ADR-005); testados mockando a fronteira de rede. Nenhuma
+coleta de localização real (ADR-026, fora de escopo por decisão do Victor).
 
-## Pendências conhecidas (bloqueiam fases específicas, não a Fase 5)
+## Pendências conhecidas (bloqueiam fases específicas, não a Fase 6)
 
-| Pendência                                                                                  | Bloqueia                                             | Situação                                                                                                                   |
-| ------------------------------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Nome real da enterprise AMAPI (`enterprises/LC...`)                                        | Teste E2E real contra a AMAPI e o Pub/Sub            | Placeholder no `.env.example`; empresa vai confirmar                                                                       |
-| Nome do tópico/subscription Pub/Sub                                                        | Idem — consumer só roda contra evento sintético hoje | Arquivado — depende de conversa com equipe de frontend/infra                                                               |
-| Valores exatos do enum `MemoryEventType` (bateria/storage)                                 | Precisão de `bateriaPct`/`storageLivreMb`            | ADR-019 — heurística tolerante até validar contra device real                                                              |
-| Lista de filiais existentes                                                                | Seed de dashboards/relatórios (Fase 6)               | Arquivado — mesma conversa acima                                                                                           |
-| Versão mínima de Android                                                                   | Alerta `SO_OBSOLETO` (Fase 6)                        | Default provisório: SDK 30 (Android 11), em `ANDROID_VERSAO_MINIMA_SDK`                                                    |
-| Lista fechada de operadoras                                                                | `linhas.operadora`                                   | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral"                          |
-| Diferenciação entre políticas `administrativo`/`operacao-campo` e lista de apps por perfil | CRUD de políticas                                    | Seed nasce com payload idêntico nas duas — ADR-016, decisão de negócio pendente (agora editável via `PATCH /policies/:id`) |
+| Pendência                                                                                  | Bloqueia                                               | Situação                                                                                                                   |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| Nome real da enterprise AMAPI (`enterprises/LC...`)                                        | Teste E2E real contra a AMAPI e o Pub/Sub              | Placeholder no `.env.example`; empresa vai confirmar                                                                       |
+| Nome do tópico/subscription Pub/Sub                                                        | Idem — consumer só roda contra evento sintético hoje   | Arquivado — depende de conversa com equipe de frontend/infra                                                               |
+| Valores exatos do enum `MemoryEventType` (bateria/storage)                                 | Precisão de `bateriaPct`/`storageLivreMb`              | ADR-019 — heurística tolerante até validar contra device real                                                              |
+| Lista de filiais existentes                                                                | Relatórios por filial mais detalhados (Fase 7?)        | Arquivado — depende de conversa com equipe de frontend/infra                                                               |
+| Limiares do motor de alertas são palpites, não medição real                                | Ajuste fino de ruído (alertas demais/de menos)         | ADR-031 — revisar assim que houver volume real de uso                                                                      |
+| Lista fechada de operadoras                                                                | `linhas.operadora`                                     | Decisão: campo texto livre, sem enum — "todas as operadoras famosas atualmente, de um modo geral"                          |
+| Diferenciação entre políticas `administrativo`/`operacao-campo` e lista de apps por perfil | CRUD de políticas                                      | Seed nasce com payload idêntico nas duas — ADR-016, decisão de negócio pendente (agora editável via `PATCH /policies/:id`) |
+| Recurso "Lost Mode" (localização real de device perdido)                                   | Nenhuma — fora de escopo até ser pedido explicitamente | ADR-026, decisão confirmada com o Victor                                                                                   |
 
 ## Problemas conhecidos
 
 Nenhum em aberto no código. Um foi corrigido durante a Fase 2 (ADR-008), outro durante a Fase
 3 (ADR-015), dois durante a Fase 4 (RBAC do `AUDITOR`, ADR-004; infra de teste, ADR-021), e
-dois durante a Fase 5 — os dois achados e corrigidos pela própria suíte de testes, antes de
-fechar a fase:
-
-- **Linha "fantasma" em `politicas`:** `POST /policies` inseria a política local ANTES de
-  saber se a AMAPI aceitaria o payload; uma falha da AMAPI deixava uma linha sem `amapiName`
-  pra trás. Corrigido desfazendo o INSERT no `catch` (ADR-023).
-- **`UNDEFINED_VALUE` no driver Postgres:** o handler `COMMAND` gravava `erro: undefined`
-  (em vez de `null`) quando não havia erro — o driver `postgres` rejeita `undefined` como
-  parâmetro de bind. Corrigido usando `null`, que é o valor correto pra "sem erro" numa coluna
-  nullable.
+dois durante a Fase 5 (linha fantasma em `politicas`, ADR-023; `UNDEFINED_VALUE` no driver
+Postgres). Nenhum problema novo na Fase 6 — as duas divergências da AMAPI encontradas
+(`BATERIA_DEGRADADA`, `SO_OBSOLETO`) e o gap de schema (`LINHA_SEM_USO`) foram achados e
+resolvidos ANTES de implementar, não depois (ADR-026/027/029/030).
 
 ## Próximo passo
 
-Fase 6 — Motor de alertas (os 8 tipos restantes da seção 9: `SEM_CHECKIN`, `NAO_CONFORME`,
-`PATCH_DESATUALIZADO`, `SO_OBSOLETO`, `STORAGE_CRITICO`, `DISPOSITIVO_ORFAO`, `LINHA_SEM_USO`,
-`BATERIA_DEGRADADA`), dashboards/relatórios, LGPD (retenção, `COLETA_LOCALIZACAO_ATIVA`).
-**Aguardando OK do Victor para começar.**
+Fase 7 — Documentação de handoff completa pro time de frontend (`docs/HANDOFF-FRONTEND.md`,
+`docs/openapi.json`, `docs/ARQUITETURA.md`, `docs/OPERACAO.md`, `docs/LGPD.md`,
+`docs/APRESENTACAO-GERENCIA.md`) — a última fase da spec original. **Aguardando OK do Victor
+para começar.**
 
-Vale resolver antes ou durante a Fase 6, sem bloquear o início: lista de filiais e versão
-mínima de Android (bloqueiam só a precisão de `SO_OBSOLETO`/relatórios, não o motor de
-alertas em si); nome do tópico/subscription Pub/Sub e da enterprise AMAPI (ADR-005) seguem
-pendentes desde a Fase 4.
+Nenhuma pendência bloqueia o início. As pendências arquivadas desde a Fase 4/5 (enterprise
+AMAPI real, tópico/subscription Pub/Sub, lista de filiais) continuam bloqueando só testes
+E2E reais contra a AMAPI, não a documentação de handoff em si.
 
 ---
 
@@ -635,3 +676,73 @@ conhecidos" acima.
 
 **Pendências futuras:** ver tabela "Pendências conhecidas" acima. Nenhuma bloqueia o início
 da Fase 6.
+
+---
+
+### 2026-09-08 — Fase 6: Motor de alertas, dashboard e LGPD
+
+**Solicitação original:** "podemos seguir para fase 6."
+
+**Status:** Concluída.
+
+**O que foi realizado:**
+
+- Motor de alertas completo — os 8 tipos restantes da seção 9, divididos em reativos (5,
+  checados a cada `STATUS_REPORT`) e periódicos (3, scan da frota via
+  `worker:manutencao`/`ALERTA_SCAN_INTERVALO_HORAS`).
+- Antes de implementar, encontrei e documentei 3 divergências reais entre a spec e a AMAPI
+  (regra 8 — avisar antes, com referência): localização não é coletada continuamente (só via
+  "Lost Mode", perguntei ao Victor e ele confirmou deixar fora de escopo — ADR-026);
+  `BATERIA_DEGRADADA` não pode medir degradação física (só carga — ADR-029); `SO_OBSOLETO`
+  precisa de uma tabela SDK→versão porque a AMAPI não expõe nível de API (ADR-030).
+- Encontrado um gap real de schema: `LINHA_SEM_USO` não tem dispositivo por definição, mas
+  `alertas.dispositivo_id` era `NOT NULL`. Corrigido com uma migration (nullable + `linha_id`
+  novo + `CHECK`), não contornado.
+- `GET /alertas` e `GET /dashboard` — primeira vez que a permissão `compliance:ler` (declarada
+  desde a Fase 2, nunca usada) ganha uma rota de verdade, com `AUDITOR` incluído (ADR-028).
+- Purga LGPD de `eventos_brutos` antigos.
+
+**Arquivos criados:** `src/domain/alertas/motor.ts`; `src/domain/lgpd/retencao.ts`;
+`src/workers/manutencao-worker.ts`; `src/modules/{alertas/alertas.routes,
+dashboard/dashboard.routes}.ts`; `src/domain/dashboard/repositorio.ts`;
+`drizzle/migrations/0004_alertas_linha_sem_uso.sql`;
+`test/integration/{motor-alertas,alertas-dashboard-routes}.test.ts`;
+`docs/api/{alertas,dashboard}.md`.
+
+**Arquivos alterados:** `src/db/schema/alertas.ts` (`linha_id`, `dispositivo_id` nullable,
+`CHECK`), `src/domain/alertas/repositorio.ts` (`resolverAlertaSeAberto`,
+`resolverAlertaDeLinhaSeAberto`, `listarAlertas`, target dinâmico no `onConflictDoNothing`),
+`src/domain/eventos/handlers/status-report.ts` (chama `verificarAlertasReativos`; resolve
+`APP_OBRIGATORIO_AUSENTE` quando o app volta — gap da própria Fase 4 fechado aqui),
+`src/modules/internal/internal.routes.ts` (`/internal/alertas/verificar`,
+`/internal/lgpd/purgar`), `src/config/env.ts`/`.env.example` (limiares de alerta + retenção),
+`src/app.ts`, `package.json` (`worker:manutencao`), `README.md`, `docs/DECISOES.md` (ADR-026 a
+ADR-031).
+
+**Arquivos removidos:** nenhum.
+
+**Funcionalidades afetadas:** `APP_OBRIGATORIO_AUSENTE` (Fase 4) ganhou auto-resolução, que
+não existia antes — não é regressão, é o mesmo alerta completando o ciclo de vida que os 8
+novos já tinham desde o início.
+
+**Decisões técnicas tomadas:** ADR-026 a ADR-031 (ver "Decisões técnicas tomadas" acima).
+
+**Impacto da alteração:** nenhuma regressão nas Fases 1–5 — revalidadas junto de cada rodada
+de testes desta fase.
+
+**Validação realizada:**
+
+- `npm run typecheck`/`lint`/`build`/`format:check` — limpos.
+- `npm test` — 281/281 passando (28 arquivos).
+- `npm run test:coverage` — 92,57% statements/lines, 96,29% functions, 81,65% branches; 100%
+  mantido em `src/plugins/rbac.ts`, `src/domain/policy/policy-invariants.ts` **e**
+  `src/integrations/amapi/mappers.ts`.
+- Critério informal desta fase confirmado contra Postgres real: um dispositivo `NON_COMPLIANT`
+  abre `NAO_CONFORME` sozinho e fecha sozinho quando volta a ficar `COMPLIANT`, sem nenhuma
+  ação manual — mesmo padrão de "critério de aceite" das fases anteriores.
+
+**Problemas encontrados:** nenhum bug de código — as 3 divergências da AMAPI e o gap de schema
+foram achados e resolvidos ANTES de implementar (ver "Decisões técnicas tomadas"), não depois.
+
+**Pendências futuras:** ver tabela "Pendências conhecidas" acima. Nenhuma bloqueia o início
+da Fase 7.

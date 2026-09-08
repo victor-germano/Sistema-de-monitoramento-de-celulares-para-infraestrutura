@@ -14,6 +14,8 @@ import {
   DispositivoDesconhecidoError,
 } from '../../domain/eventos/handlers/status-report.ts';
 import { registrarAuditoria } from '../../domain/auditoria/registrar.ts';
+import { executarScanPeriodico } from '../../domain/alertas/motor.ts';
+import { purgarEventosBrutosAntigos } from '../../domain/lgpd/retencao.ts';
 import { logger } from '../../shared/logger.ts';
 import { withRole } from '../../plugins/rbac.ts';
 
@@ -113,5 +115,42 @@ export function registerInternalRoutes(app: FastifyInstance): void {
     });
 
     return reply.send(resultados);
+  });
+
+  // --- POST /internal/alertas/verificar ----------------------------------------
+  // Dispara na hora os 3 scans periódicos (SEM_CHECKIN/DISPOSITIVO_ORFAO/
+  // LINHA_SEM_USO) que `src/workers/manutencao-worker.ts` roda sozinho a
+  // cada `ALERTA_SCAN_INTERVALO_HORAS` — útil pra não esperar o próximo
+  // ciclo depois de uma mudança de configuração, ou simplesmente rodar sem
+  // o worker dedicado de pé.
+  zodApp.post('/internal/alertas/verificar', withRole('ADMIN'), async (request, reply) => {
+    const resultado = await executarScanPeriodico();
+
+    await registrarAuditoria(db, {
+      ator: { id: request.user!.sub, email: request.user!.email },
+      acao: 'ALERTAS_SCAN_MANUAL',
+      entidade: 'alerta',
+      detalhes: resultado,
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+
+    return reply.send(resultado);
+  });
+
+  // --- POST /internal/lgpd/purgar -----------------------------------------------
+  zodApp.post('/internal/lgpd/purgar', withRole('ADMIN'), async (request, reply) => {
+    const eventosBrutosPurgados = await purgarEventosBrutosAntigos();
+
+    await registrarAuditoria(db, {
+      ator: { id: request.user!.sub, email: request.user!.email },
+      acao: 'LGPD_PURGA_MANUAL',
+      entidade: 'eventos_brutos',
+      detalhes: { eventosBrutosPurgados },
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+
+    return reply.send({ eventosBrutosPurgados });
   });
 }

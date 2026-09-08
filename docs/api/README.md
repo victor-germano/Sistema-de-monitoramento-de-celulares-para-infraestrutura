@@ -14,6 +14,8 @@ precisar ler o código. Contrato exato de request/response (schemas Zod → Open
 | [`politicas.md`](./politicas.md)                           | `/policies` — CRUD, versionamento, rollback; requer o worker `worker:policy-write` de pé                                    |
 | [`comandos.md`](./comandos.md)                             | `POST /devices/:id/comandos` — emissão de verdade (LOCK/REBOOT/RESET_PASSWORD/CLEAR_APP_DATA/RELINQUISH_OWNERSHIP/WIPE)     |
 | [`colaboradores-e-linhas.md`](./colaboradores-e-linhas.md) | `/colaboradores`, `/linhas` — CRUD de contexto organizacional                                                               |
+| [`alertas.md`](./alertas.md)                               | `/alertas` — os 9 tipos, reativos vs. periódicos, ciclo de vida (reconhecer/resolver)                                       |
+| [`dashboard.md`](./dashboard.md)                           | `GET /dashboard` — resumo agregado da frota                                                                                 |
 
 Cada fase nova adiciona os tópicos que introduziu — não é um documento por rota, é um documento por
 **assunto** (às vezes várias rotas relacionadas, como em `devices.md`).

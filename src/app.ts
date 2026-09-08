@@ -23,6 +23,8 @@ import { registerAuditoriaRoutes } from './modules/auditoria/auditoria.routes.ts
 import { registerPoliticaRoutes } from './modules/politicas/politicas.routes.ts';
 import { registerColaboradorRoutes } from './modules/colaboradores/colaboradores.routes.ts';
 import { registerLinhaRoutes } from './modules/linhas/linhas.routes.ts';
+import { registerAlertaRoutes } from './modules/alertas/alertas.routes.ts';
+import { registerDashboardRoutes } from './modules/dashboard/dashboard.routes.ts';
 
 // Fábrica em vez de instância no módulo top-level: os testes de integração
 // precisam construir a app DEPOIS de setar as env vars dos containers do
@@ -83,6 +85,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerPoliticaRoutes(app);
   registerColaboradorRoutes(app);
   registerLinhaRoutes(app);
+  registerAlertaRoutes(app);
+  registerDashboardRoutes(app);
 
   return app;
 }

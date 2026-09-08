@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  check,
   index,
   jsonb,
   pgEnum,
@@ -11,6 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { criadoEm, uuidPk } from './_shared.ts';
 import { dispositivos } from './dispositivos.ts';
+import { linhas } from './linhas.ts';
 
 // Os 9 tipos da seção 9 — fechado e controlado pelo motor de alertas (nosso
 // código), não observado de fora. Enum de banco, ver ADR-007.
@@ -32,9 +34,14 @@ export const alertas = pgTable(
   'alertas',
   {
     id: uuidPk(),
-    dispositivoId: uuid('dispositivo_id')
-      .notNull()
-      .references(() => dispositivos.id),
+    // Nullable a partir da Fase 6 (ADR-027): `LINHA_SEM_USO` (seção 9) é o
+    // único dos 9 tipos sem um dispositivo associado por definição — o
+    // problema é justamente a AUSÊNCIA de um device usando a linha.
+    // Exatamente um entre `dispositivo_id`/`linha_id` é preenchido — nunca
+    // os dois, nunca nenhum — garantido pelo CHECK abaixo, não só por
+    // convenção de quem escreve a query.
+    dispositivoId: uuid('dispositivo_id').references(() => dispositivos.id),
+    linhaId: uuid('linha_id').references(() => linhas.id),
     tipo: alertaTipoEnum('tipo').notNull(),
     severidade: alertaSeveridadeEnum('severidade').notNull(),
     titulo: text('titulo').notNull(),
@@ -67,5 +74,19 @@ export const alertas = pgTable(
     uniqueIndex('alertas_aberto_unico_idx')
       .on(t.dispositivoId, t.tipo)
       .where(sql`${t.resolvidoEm} is null`),
+    // Mesmo princípio do índice acima, só que pro caso `linha_id` (Fase 6,
+    // ADR-027) — dois índices parciais separados em vez de um índice
+    // composto pelos dois campos, porque um `UNIQUE (dispositivo_id,
+    // linha_id, tipo)` deixaria passar duas linhas com `dispositivo_id`
+    // NULL + o mesmo `linha_id`/`tipo` sem problema (Postgres trata NULL
+    // como distinto de NULL em índice único) — não é isso que queremos
+    // impedir aqui.
+    uniqueIndex('alertas_linha_aberto_unico_idx')
+      .on(t.linhaId, t.tipo)
+      .where(sql`${t.resolvidoEm} is null`),
+    check(
+      'alertas_dispositivo_ou_linha_check',
+      sql`(${t.dispositivoId} is not null) <> (${t.linhaId} is not null)`,
+    ),
   ],
 );
