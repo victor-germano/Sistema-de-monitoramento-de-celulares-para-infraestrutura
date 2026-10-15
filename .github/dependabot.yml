@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Dependências npm — PR automático semanal. Agrupadas por tipo pra não virar
+  # uma enxurrada de 20 PRs individuais toda segunda-feira; cada PR ainda
+  # precisa passar pelo CI (.github/workflows/ci.yml) antes de poder ser
+  # mergeado.
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 10
+    groups:
+      dependencias-producao:
+        dependency-type: 'production'
+        update-types: ['minor', 'patch']
+      dependencias-dev:
+        dependency-type: 'development'
+        update-types: ['minor', 'patch']
+    # Major version fica sempre em PR separado, nunca agrupado — é o tipo de
+    # mudança que mais provavelmente exige revisão manual e re-execução da
+    # suíte completa antes de mergear (ver docs/DECISOES.md pra decisões já
+    # tomadas que uma major de drizzle-orm/fastify/etc. poderia invalidar).
+
+  # Versões das actions usadas em .github/workflows/*.yml — mesmo princípio
+  # de segurança contínua, aplicado ao próprio pipeline de CI.
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'

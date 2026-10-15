@@ -1,0 +1,107 @@
+name: CI
+
+# Roda em todo push na main e em todo pull request contra ela. Os 3 jobs são
+# independentes (rodam em paralelo) — qualquer um que falhar marca o PR como
+# vermelho, antes de qualquer humano revisar o código.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  qualidade:
+    name: Lint, format, typecheck, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm run build
+
+  testes:
+    name: Suíte de testes (Testcontainers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      # Docker já vem pronto no runner ubuntu-latest — os próprios testes
+      # sobem e derrubam Postgres/Redis via Testcontainers, igual na máquina
+      # local (ver docs/SETUP.md). Suíte roda serial (ADR-021), sem flag
+      # extra aqui.
+      - run: npm run test:coverage
+
+  openapi-sincronizado:
+    name: openapi.json reflete as rotas atuais
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: mdm
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U app -d mdm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      # Mesmo princípio de scripts/gerar-openapi.ts: nenhuma query roda de
+      # verdade, mas o cliente Redis conecta no import do módulo
+      # (lazyConnect: false) — por isso os serviços acima, mesmo sem
+      # migration nenhuma aplicada.
+      - run: npm run docs:openapi
+        env:
+          NODE_ENV: development
+          PORT: '13000'
+          LOG_LEVEL: info
+          ALLOWED_ORIGINS: http://localhost:13000
+          DATABASE_URL: postgres://app:app@localhost:5432/mdm
+          REDIS_URL: redis://localhost:6379
+          OIDC_ISSUER: https://accounts.google.com
+          OIDC_CLIENT_ID: placeholder-ci
+          OIDC_CLIENT_SECRET: placeholder-ci
+          OIDC_REDIRECT_URI: http://localhost:13000/auth/callback
+          FRONTEND_URL: http://localhost:5173
+          ALLOWED_EMAIL_DOMAINS: gruporoveri.com.br
+          JWT_SECRET: placeholder-apenas-para-ci-gerar-docs-32-chars
+          AMAPI_ENTERPRISE_NAME: enterprises/LC00000000000000000
+          AMAPI_SERVICE_ACCOUNT_KEY_PATH: ./secrets/amapi-service-account.json
+          GOOGLE_CLOUD_PROJECT: placeholder-ci
+          PUBSUB_SUBSCRIPTION: placeholder-ci
+      # Se uma rota mudou e ninguém rodou `npm run docs:openapi` de novo,
+      # este diff falha o job — o contrato da API nunca fica desatualizado
+      # em silêncio.
+      - name: Falhar se docs/openapi.json ficou desatualizado
+        run: |
+          if ! git diff --exit-code --quiet docs/openapi.json; then
+            echo "::error::docs/openapi.json está desatualizado. Rode 'npm run docs:openapi' e comite o resultado."
+            git diff docs/openapi.json
+            exit 1
+          fi
