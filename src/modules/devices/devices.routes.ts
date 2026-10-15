@@ -267,7 +267,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           .update(comandos)
           .set({ status: 'FALHA', erro: mensagem })
           .where(eq(comandos.id, comando.id));
-        logger.error({ err: erro, comandoId: comando.id }, 'falha ao emitir comando na AMAPI');
+        // NUNCA `{ err: erro }` aqui: pra RESET_PASSWORD, `erro` pode ser um
+        // erro bruto do googleapis/gaxios carregando o body da requisição
+        // original (com `newPassword`) em profundidade variável — o
+        // serializer padrão do Pino copiaria isso pro log. Só a mensagem,
+        // que nunca contém o payload da requisição, é segura de logar aqui
+        // (achado numa revisão de segurança, ver PROJECT_MEMORY.md).
+        logger.error(
+          { erroMensagem: mensagem, comandoId: comando.id, tipo: request.body.tipo },
+          'falha ao emitir comando na AMAPI',
+        );
         return sendProblem(reply, 502, 'Falha ao emitir comando na AMAPI', mensagem);
       }
 
