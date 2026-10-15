@@ -209,6 +209,26 @@ describe('PATCH /devices/:id', () => {
       true,
     );
   });
+
+  // Achado numa revisão: sem checar antes, isso batia direto no índice
+  // único de `patrimonio` e quebrava com 500 genérico, em vez do 409
+  // amigável que o mesmo padrão já usa pra matrícula/número.
+  it('recusa com 409 (não 500) vincular um patrimônio já usado por outro dispositivo', async () => {
+    const { dispositivos } = await import('../../src/db/schema/dispositivos.ts');
+    const [outro] = await db
+      .insert(dispositivos)
+      .values({ amapiName: 'enterprises/x/devices/outro-dispositivo', patrimonio: 'PAT-JA-EXISTE' })
+      .returning();
+    if (!outro) throw new Error('setup falhou — segundo dispositivo não foi criado');
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/devices/${dispositivoId}`,
+      headers: authHeader('ADMIN'),
+      payload: { patrimonio: 'PAT-JA-EXISTE' },
+    });
+    expect(response.statusCode).toBe(409);
+  });
 });
 
 describe('GET /devices/:id/apps e /comandos', () => {

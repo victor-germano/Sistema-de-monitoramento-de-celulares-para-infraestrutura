@@ -26,6 +26,24 @@ export async function buscarDispositivoPorAmapiName(
   return dispositivo;
 }
 
+/**
+ * Usado por `PATCH /devices/:id` pra checar o índice único de `patrimonio`
+ * ANTES do update — achado numa revisão: sem isso, vincular um patrimônio
+ * já usado por outro device batia direto no índice único do banco e
+ * quebrava com 500 genérico, em vez do 409 amigável que o mesmo padrão
+ * (checar-e-retornar-409) já usa pra matrícula/número em outros módulos.
+ */
+export async function buscarDispositivoPorPatrimonio(
+  patrimonio: string,
+): Promise<Dispositivo | undefined> {
+  const [dispositivo] = await db
+    .select()
+    .from(dispositivos)
+    .where(eq(dispositivos.patrimonio, patrimonio))
+    .limit(1);
+  return dispositivo;
+}
+
 export async function buscarDispositivoPorId(id: string): Promise<Dispositivo | undefined> {
   const [dispositivo] = await db
     .select()

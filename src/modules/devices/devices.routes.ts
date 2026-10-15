@@ -8,6 +8,7 @@ import { z } from 'zod';
 import {
   atualizarVinculoDispositivo,
   buscarDispositivoPorId,
+  buscarDispositivoPorPatrimonio,
   listarAppsDoDispositivo,
   listarDispositivos,
 } from '../../domain/dispositivos/repositorio.ts';
@@ -139,6 +140,13 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       schema: { params: paramsIdSchema, body: patchBodySchema },
     },
     async (request, reply) => {
+      if (request.body.patrimonio) {
+        const emUsoPorOutro = await buscarDispositivoPorPatrimonio(request.body.patrimonio);
+        if (emUsoPorOutro && emUsoPorOutro.id !== request.params.id) {
+          return sendProblem(reply, 409, 'Patrimônio já vinculado a outro dispositivo', undefined);
+        }
+      }
+
       const dispositivo = await atualizarVinculoDispositivo(request.params.id, request.body);
       if (!dispositivo) {
         return sendProblem(reply, 404, 'Dispositivo não encontrado', undefined);
