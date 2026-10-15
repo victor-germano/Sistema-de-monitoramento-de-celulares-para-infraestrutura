@@ -25,7 +25,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "db:seed": "tsx src/db/seed/politicas-padrao.ts"
+    "db:seed": "tsx src/db/seed/politicas-padrao.ts",
+    "docs:openapi": "tsx --env-file=.env scripts/gerar-openapi.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

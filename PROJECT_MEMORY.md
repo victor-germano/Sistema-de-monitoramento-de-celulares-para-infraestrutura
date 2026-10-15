@@ -105,6 +105,15 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 
 ## Estado atual
 
+**Fase 7 — Documentação de handoff: concluída.**
+
+Os 6 entregáveis da Fase 7 existem em `docs/`: `openapi.json` (gerado do código, não
+escrito à mão — ver `npm run docs:openapi`), `ARQUITETURA.md`, `OPERACAO.md`, `LGPD.md`,
+`APRESENTACAO-GERENCIA.md`, `HANDOFF-FRONTEND.md`. Ver entrada "Fase 7" abaixo para o
+detalhe completo do que cada um cobre e o que ficou registrado como pendência dentro
+deles (não pendências novas de código, pendências de decisão de negócio/jurídica/infra
+documentadas para quem for ler cada documento).
+
 **Fase 6 — Motor de alertas, dashboard e LGPD: concluída.**
 
 O que existe e funciona (além de tudo da Fase 1 — ver entrada correspondente abaixo):
@@ -274,14 +283,16 @@ resolvidos ANTES de implementar, não depois (ADR-026/027/029/030).
 
 ## Próximo passo
 
-Fase 7 — Documentação de handoff completa pro time de frontend (`docs/HANDOFF-FRONTEND.md`,
-`docs/openapi.json`, `docs/ARQUITETURA.md`, `docs/OPERACAO.md`, `docs/LGPD.md`,
-`docs/APRESENTACAO-GERENCIA.md`) — a última fase da spec original. **Aguardando OK do Victor
-para começar.**
+Fase 7 concluída — era a última fase da spec original. Não há próxima fase definida pela
+spec. Dois caminhos possíveis a partir daqui, nenhum iniciado:
 
-Nenhuma pendência bloqueia o início. As pendências arquivadas desde a Fase 4/5 (enterprise
-AMAPI real, tópico/subscription Pub/Sub, lista de filiais) continuam bloqueando só testes
-E2E reais contra a AMAPI, não a documentação de handoff em si.
+1. **Construção da interface** pelo time de frontend, usando `docs/HANDOFF-FRONTEND.md` +
+   `docs/openapi.json` como ponto de partida (este repositório continua só-backend).
+2. **Teste E2E real contra a AMAPI**, bloqueado pelas mesmas 3 pendências arquivadas desde
+   a Fase 4/5 (nome real da enterprise AMAPI, tópico/subscription Pub/Sub, lista de
+   filiais) — nenhuma resolvível pela equipe técnica sozinha, ver `docs/APRESENTACAO-GERENCIA.md`.
+
+Nenhuma pendência de código bloqueia nenhum dos dois caminhos.
 
 ---
 
@@ -746,3 +757,95 @@ foram achados e resolvidos ANTES de implementar (ver "Decisões técnicas tomada
 
 **Pendências futuras:** ver tabela "Pendências conhecidas" acima. Nenhuma bloqueia o início
 da Fase 7.
+
+---
+
+### 2026-10-14 — Fase 7: Documentação de handoff
+
+**Solicitação original:** recuperar o projeto (fora da sessão de trabalho padrão do
+Victor, achado por busca no sistema de arquivos) e prosseguir pra Fase 7 — pedido
+explícito de explicar cada passo em detalhe, por ser a primeira vez do Victor com este
+tipo de projeto.
+
+**Status:** Concluída.
+
+**O que foi realizado:**
+
+- **`docs/openapi.json`** — gerado a partir do próprio código (schemas Zod de cada rota
+  via `fastify-type-provider-zod` + `@fastify/swagger`), não escrito à mão. Script novo
+  `scripts/gerar-openapi.ts` (`npm run docs:openapi`) constrói a app via `buildApp()` e
+  chama `app.swagger()` — exige Postgres/Redis alcançáveis (nenhuma query roda de
+  verdade, mas o cliente Redis conecta no import do módulo, `lazyConnect: false`). 39
+  combinações rota+método confirmadas no resultado, batendo com os 9 módulos de rotas
+  reais.
+- **`docs/ARQUITETURA.md`** — os 4 processos (API + 3 workers), fluxo completo de um
+  evento (device → Pub/Sub → `eventos_brutos` → handler → alerta), as 13 tabelas, por
+  que a fila de escrita de política é serializada (rate limit da AMAPI é por projeto,
+  não por device), motor de alertas reativo vs. periódico.
+- **`docs/OPERACAO.md`** — achado real durante a escrita: o `docker-compose.yml` só
+  define o serviço `api`, não existe deploy definido pros 3 workers em produção;
+  documentado como lacuna conhecida, não resolvido silenciosamente. Também documentada
+  uma restrição operacional crítica não óbvia no código: o worker de escrita de política
+  só pode ter 1 réplica (2 instâncias quebram a garantia de serialização, cada uma com
+  seu próprio `concurrency: 1`); o worker de manutenção também só 1 (senão dobra scan
+  periódico/purga); só API e worker de Pub/Sub podem escalar.
+- **`docs/LGPD.md`** — inventário completo de dado pessoal por tabela (titulares:
+  colaboradores donos de device + usuários do painel), o que o sistema explicitamente
+  NÃO coleta (localização contínua, senha de `RESET_PASSWORD`), retenção (só
+  `eventos_brutos` tem purga automática hoje), e uma lista de pendências marcadas
+  explicitamente como decisão jurídica, não técnica (base legal de cada tratamento,
+  política de retenção pra `colaboradores`/`dispositivos`, processo formal de direito do
+  titular).
+- **`docs/APRESENTACAO-GERENCIA.md`** — resumo não-técnico pra gerência do Grupo Roveri:
+  o que já funciona, o que esta fase entrega, e as 3 pendências que só a empresa
+  consegue resolver (confirmação da enterprise AMAPI, tópico/subscription Pub/Sub, lista
+  de filiais) — deixado explícito que nenhuma delas é atraso da equipe técnica.
+- **`docs/HANDOFF-FRONTEND.md`** — fluxo de autenticação completo passo a passo (login
+  via OIDC → cookie httpOnly → `POST /auth/refresh` → Bearer token), formato de erro RFC
+  9457, padrão de paginação por cursor (`itens`/`proximoCursor`), os 4 papéis e o que
+  cada um vê, fluxos principais (dashboard, lista de devices, emissão de comando com
+  atenção a `WIPE`, políticas com latência da fila). Achado relevante: **não existe
+  nenhuma rota HTTP pra criar token de enrollment** (processo de "adicionar device
+  novo") — só existe como função interna, gap já registrado em `docs/SETUP.md` mas que
+  precisava ficar explícito pro time de frontend não assumir que a rota existe.
+- `README.md` atualizado (estado atual = Fase 7, lista de documentos de handoff com
+  links).
+
+**Arquivos criados:** `scripts/gerar-openapi.ts`; `docs/{openapi.json,ARQUITETURA,
+OPERACAO,LGPD,APRESENTACAO-GERENCIA,HANDOFF-FRONTEND}.md`.
+
+**Arquivos alterados:** `package.json` (script `docs:openapi`), `README.md`, este
+arquivo.
+
+**Arquivos removidos:** nenhum (o `.env`/`docker-compose.override.yml`/edição temporária
+de porta usados só pra gerar o `openapi.json` foram criados e desfeitos dentro da
+própria sessão, nunca chegaram a ficar no repositório).
+
+**Funcionalidades afetadas:** nenhuma — fase é só documentação, nenhuma rota/lógica de
+domínio mudou.
+
+**Impacto da alteração:** nenhum risco de regressão — nenhum arquivo de `src/` foi
+tocado.
+
+**Validação realizada:**
+
+- `npm run typecheck`/`lint`/`build` — limpos (inclusive o script novo).
+- `npm run format:check` — os 5 markdowns novos formatados com Prettier; os 3 avisos
+  remanescentes (`docker-compose.yml`, `package.json`, `README.md`) confirmados
+  pré-existentes via `git stash` (mesmo na árvore committada original, antes de
+  qualquer edição desta sessão) — não são regressão desta fase.
+- `openapi.json` inspecionado programaticamente (contagem de paths/métodos) em vez de
+  só "rodou sem erro" — conferido que reflete os 9 módulos de rotas reais, não uma
+  versão parcial.
+
+**Problemas encontrados:** nenhum bug de código. Duas lacunas de produto/processo
+encontradas e documentadas (não corrigidas, porque são decisão de negócio/infra, não
+bug): ausência de rota de enrollment via API (já era conhecida, mas não estava no
+handoff de frontend) e ausência de definição de deploy dos 3 workers em produção (nova,
+documentada em `docs/OPERACAO.md`).
+
+**Pendências futuras:** as 3 já arquivadas desde a Fase 4/5 (enterprise AMAPI real,
+tópico/subscription Pub/Sub, lista de filiais) — nenhuma delas bloqueia o que a Fase 7
+entrega, só bloqueiam teste E2E real. Novas, registradas dentro dos próprios documentos
+desta fase (não pendência de código): base legal/retenção/processo de titular (LGPD),
+definição de deploy dos workers (OPERACAO), rota de enrollment (HANDOFF-FRONTEND).

@@ -8,7 +8,7 @@ Este repositório é **só backend**. A interface é construída por outra equip
 documentação gerada em [`docs/`](./docs) (destaque para `docs/HANDOFF-FRONTEND.md` e
 `docs/openapi.json`, entregues na Fase 7).
 
-> Estado atual: **Fase 6 — Motor de alertas, dashboard e LGPD** concluída. Ver `PROJECT_MEMORY.md`
+> Estado atual: **Fase 7 — Documentação de handoff** concluída. Ver `PROJECT_MEMORY.md`
 > para o histórico completo de decisões e o que falta.
 
 ## Stack
@@ -81,7 +81,14 @@ npm run test:coverage
 - [`docs/api/`](./docs/api/) — um markdown por tópico de API (pipeline Pub/Sub, `/devices`, `/internal`,
   `/auditoria`, `/policies`, comandos, `/colaboradores`/`/linhas`, `/alertas`, `/dashboard`), pensado pra
   quem vai construir a interface sem ler o código.
+- [`docs/HANDOFF-FRONTEND.md`](./docs/HANDOFF-FRONTEND.md) — ponto de partida pra quem vai construir a
+  interface: autenticação, formato de erro, paginação, fluxos principais.
+- [`docs/openapi.json`](./docs/openapi.json) — contrato formal de toda rota (gerado a partir dos schemas
+  Zod — rode `npm run docs:openapi` de novo sempre que uma rota mudar).
+- [`docs/ARQUITETURA.md`](./docs/ARQUITETURA.md) — como as peças se encaixam (processos, fila, Pub/Sub,
+  banco).
+- [`docs/OPERACAO.md`](./docs/OPERACAO.md) — deploy, variáveis de produção, o que monitorar, runbook.
+- [`docs/LGPD.md`](./docs/LGPD.md) — inventário de dados pessoais, retenção, pendências jurídicas.
+- [`docs/APRESENTACAO-GERENCIA.md`](./docs/APRESENTACAO-GERENCIA.md) — resumo não-técnico do que foi
+  entregue e o que falta.
 - `PROJECT_MEMORY.md` (raiz) — memória viva do projeto: estado atual, pendências, histórico de solicitações.
-
-Os demais documentos (`ARQUITETURA.md`, `OPERACAO.md`, `LGPD.md`, `HANDOFF-FRONTEND.md`,
-`APRESENTACAO-GERENCIA.md`, `openapi.json`) são entregáveis da Fase 7 e ainda não existem.
