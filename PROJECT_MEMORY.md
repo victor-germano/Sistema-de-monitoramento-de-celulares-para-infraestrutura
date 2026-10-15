@@ -105,11 +105,14 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 
 ## Estado atual
 
-**Camada de automação (pós-Fase 7): concluída.** CI (lint/format/typecheck/build/testes/
-deriva do openapi.json) no GitHub Actions, pre-commit hooks (husky+lint-staged),
-Dependabot, CodeQL, exportação Excel do dashboard e `render.yaml` como
-infraestrutura-como-código pro deploy real (Render pro backend, Vercel reservado pro
-frontend). Ver entrada datada abaixo para o detalhe completo.
+**Camada de automação (pós-Fase 7): concluída, e já validada contra o GitHub real.**
+Primeiro push (histórico completo, o repositório remoto estava vazio desde a Fase 1) e
+primeira execução real do CI/CodeQL revelaram 3 bugs que só apareciam fora da máquina
+local (ver entrada "Diagnóstico pós-push" abaixo) — corrigidos e CI **verde** no commit
+`b5ed2b3`. CI (lint/format/typecheck/build/testes/deriva do openapi.json) no GitHub
+Actions, pre-commit hooks (husky+lint-staged), Dependabot, CodeQL, exportação Excel do
+dashboard e `render.yaml` como infraestrutura-como-código pro deploy real (Render pro
+backend, Vercel reservado pro frontend).
 
 **Fase 7 — Documentação de handoff: concluída.**
 
@@ -289,11 +292,14 @@ resolvidos ANTES de implementar, não depois (ADR-026/027/029/030).
 
 ## Próximo passo
 
-Camada de automação concluída. Fase 7 concluída — era a última fase da spec original. Não há próxima fase definida pela
-spec. Dois caminhos possíveis a partir daqui, nenhum iniciado:
+Camada de automação concluída e validada contra CI/CodeQL reais (verde em `b5ed2b3`).
+Fase 7 concluída — era a última fase da spec original. Não há próxima fase definida
+pela spec. Dois caminhos possíveis a partir daqui:
 
 1. **Construção da interface** pelo time de frontend, usando `docs/HANDOFF-FRONTEND.md` +
    `docs/openapi.json` como ponto de partida (este repositório continua só-backend).
+   **Liberado para começar** — backend estável, testado e com CI verde; só falta decidir
+   a stack do frontend (provavelmente algo Vercel-nativo, ex. Next.js ou Vite+React).
 2. **Teste E2E real contra a AMAPI**, bloqueado pelas mesmas 3 pendências arquivadas desde
    a Fase 4/5 (nome real da enterprise AMAPI, tópico/subscription Pub/Sub, lista de
    filiais) — nenhuma resolvível pela equipe técnica sozinha, ver `docs/APRESENTACAO-GERENCIA.md`.
@@ -969,3 +975,77 @@ trabalho, ambas documentadas, não ambas corrigidas (a segunda é pendência del
    `render.yaml` em texto plano.
 4. Pendências já listadas nas entradas anteriores (enterprise AMAPI real, Pub/Sub,
    filiais, construção do frontend) continuam de pé, inalteradas.
+
+---
+
+### 2026-10-15 — Primeiro push real e diagnóstico pós-GitHub
+
+**Solicitação original:** Victor pediu push pro GitHub ("de forma limpa e segura,
+automaticamente") e, depois, pra verificar se algo falhou no CI/CodeQL e corrigir
+automaticamente — pergunta final: isso já permite considerar o backend 100% pronto pro
+frontend.
+
+**Status:** Concluída.
+
+**O que foi descoberto:** o repositório remoto estava **vazio** desde a Fase 1
+(clonado vazio, nunca recebeu push em nenhuma fase anterior) — `git branch
+--unset-upstream` e "upstream is gone" eram sintoma disso, não de divergência. Primeiro
+`git push -u origin main` enviou todo o histórico de uma vez (10 commits).
+
+Sem `gh` CLI instalado — diagnóstico do Actions feito via API do GitHub direto
+(`git credential fill` pra extrair o token já configurado, nunca impresso em log/saída).
+3 falhas reais na primeira execução do CI/CodeQL contra a infraestrutura de verdade
+(nenhuma reproduzível localmente, por isso não apareceram antes):
+
+1. `npm run docs:openapi` usa `tsx --env-file=.env` — Node exige que o arquivo exista
+   mesmo com as variáveis já injetadas via `env:` do workflow (`node: .env: not found`).
+   Corrigido com `touch .env` antes do passo no CI.
+2. `npm run lint` (regras type-aware do `typescript-eslint`, `parserOptions.project`)
+   estourou o heap default do V8 no runner padrão (`JavaScript heap out of memory`) —
+   na máquina local funciona porque o Node ajusta o heap pela RAM disponível, no runner
+   não. Corrigido com `NODE_OPTIONS=--max-old-space-size=4096` no passo.
+3. CodeQL falhava com "Code scanning is not enabled for this repository" — o
+   repositório é **privado**, e essa integração nativa (aba Security) depende de uma
+   configuração nas Settings do GitHub que pode exigir plano pago; não é decisão
+   técnica pra tomar sozinho. Workaround aplicado: `upload: false` no
+   `codeql-action/analyze` + `actions/upload-artifact`, mantendo a análise rodando sem
+   depender dessa feature — documentado como pendência de decisão do Victor (habilitar
+   ou não depois, conferindo o custo nas próprias Settings do repositório).
+
+Depois de corrigir os 3, uma 4ª falha real apareceu (não um bug de infraestrutura, o
+job `openapi-sincronizado` funcionando exatamente como projetado): `docs/openapi.json`
+estava desatualizado de verdade — o commit da feature Excel (`89e6036`) adicionou
+`GET /dashboard/export` mas ninguém rodou `npm run docs:openapi` de novo antes de
+commitar. Regenerado e commitado separadamente.
+
+**Status final confirmado contra o GitHub real** (não assumido): CI e CodeQL
+`conclusion=success` no commit `b5ed2b3` (consultado via API até `status=completed` nos
+dois, não só "deu push e assumi que passou").
+
+**Arquivos alterados:** `.github/workflows/ci.yml` (fix `.env`/heap), `.github/workflows/codeql.yml`
+(workaround de upload), `docs/openapi.json` (regenerado), este arquivo. 3 commits
+(`da6c953`, `b5ed2b3`, e este) além do push inicial.
+
+**Decisões técnicas tomadas:** workaround do CodeQL (`upload: false` em vez de exigir
+"Code scanning" habilitado) — decisão técnica reversível a qualquer momento; não decide
+pelo Victor se vale habilitar a feature paga/nativa.
+
+**Pendências futuras:**
+
+1. **Habilitar "Code scanning" nas Settings do repositório** (opcional, decisão do
+   Victor) — conferir custo real pra repositório privado antes; sem isso, resultado do
+   CodeQL só fica disponível como artefato do workflow, não na aba Security.
+2. **7 PRs do Dependabot já abertos** (consequência esperada de ativar o
+   `dependabot.yml`) — nenhum urgente, cada um passa pelo mesmo CI antes de poder ser
+   mergeado; revisar quando conveniente.
+3. Pendências já listadas nas entradas anteriores inalteradas (upgrade de
+   `drizzle-orm`/breaking changes, validação do `render.yaml` contra conta real,
+   enterprise AMAPI/Pub/Sub/filiais, construção do frontend).
+
+**Resposta à pergunta do Victor ("posso considerar o backend 100%?"):** sim, do ponto
+de vista de **qualidade de código e pipeline** — testado (283/283), com CI/CodeQL
+verdes contra a infraestrutura real, não só localmente. **Não 100%** do ponto de vista
+de **produto em produção**: as 3 pendências de negócio (enterprise AMAPI, Pub/Sub,
+filiais) continuam bloqueando o primeiro teste E2E real contra um device físico — mas
+nenhuma delas bloqueia começar o frontend, que consome a API já estável e documentada
+(`docs/openapi.json`/`HANDOFF-FRONTEND.md`).
