@@ -18,6 +18,7 @@ import { aplicarInvariantesComAuditoria } from '../../domain/policy/policy-invar
 import { registrarAuditoria } from '../../domain/auditoria/registrar.ts';
 import { sendProblem } from '../../shared/problem-details.ts';
 import { logger } from '../../shared/logger.ts';
+import { zQueryBoolean } from '../../shared/zod-query.ts';
 import { withRole } from '../../plugins/rbac.ts';
 
 // Corpo do payload é o `Policy` inteiro da AMAPI — schema tão grande e
@@ -44,7 +45,7 @@ const rollbackBodySchema = z.object({ versao: z.coerce.number().int().positive()
 
 const listarQuerySchema = z.object({
   busca: z.string().optional(),
-  ativa: z.coerce.boolean().optional(),
+  ativa: zQueryBoolean.optional(),
 });
 
 const ROLES_LEITURA = ['VIEWER', 'TECNICO', 'ADMIN'] as const;
