@@ -105,6 +105,37 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 
 ## Estado atual
 
+**Revisão completa do backend (15 bugs, 5 lotes): concluída e validada contra o GitHub
+real.** Pedido explícito do Victor antes de liberar o frontend ("a empresa tem mais de
+mil funcionários, precisa estar rodando liso") — revisão adversarial dedicada (não só
+"os testes passam") encontrou 15 bugs reais de correção/segurança que a suíte de 283
+testes da época não cobria. Corrigidos em 5 commits temáticos, cada um com teste novo
+que prova o bug E a correção, validado isoladamente antes do commit seguinte:
+
+1. **Segurança** — RBAC rodava depois da validação de schema (400 revelava campos de
+   rota protegida pra quem nem autenticou, em vez de 401); vazamento de senha no log
+   via erro bruto do googleapis.
+2. **Contrato de API** — `?ativo=false`/`?ativa=false`/`?aberto=false` faziam o
+   contrário do pedido (`z.coerce.boolean()`); paginação de `/alertas` nunca avançava
+   (cursor invertido); `valorMensal` de `/linhas` voltava como string, não número.
+3. **Motor de alertas** — app desinstalado nunca era detectado como ausente
+   (`dispositivo_apps` nunca apagava linha antiga); `APP_OBRIGATORIO_AUSENTE` nunca se
+   resolvia sozinho quando a política mudava ou o device era desvinculado.
+4. **Integridade com a AMAPI** — escrita de política + histórico de versão não eram
+   atômicos (sem transação); timeout do BullMQ perdia o resultado real do job (que
+   continua rodando) — agora reconcilia depois via `aposTimeout`; comando sem nome de
+   operação ficava "ENVIADO" pra sempre, sem erro visível.
+5. **Config/robustez** — primeiro ADMIN podia travar como VIEWER por maiúscula/
+   minúscula; config de domínio malformada podia zerar login da empresa sem erro no
+   boot; patrimônio duplicado quebrava com 500 em vez de 409; redelivery do Pub/Sub
+   nunca tentava reprocessar erro transitório; fuso do export Excel usava UTC.
+
+**Confirmado contra a infraestrutura real** (não assumido): depois do push final, o job
+`openapi-sincronizado` do CI pegou — pela segunda vez nesta jornada, exatamente como
+projetado — uma divergência real (o fix dos filtros booleanos mudou o schema de 3 query
+params, e o `openapi.json` não tinha sido regenerado). Corrigido num commit extra.
+Resultado final: **310 testes, CI e CodeQL verdes** no commit `90cf9b5`.
+
 **Camada de automação (pós-Fase 7): concluída, e já validada contra o GitHub real.**
 Primeiro push (histórico completo, o repositório remoto estava vazio desde a Fase 1) e
 primeira execução real do CI/CodeQL revelaram 3 bugs que só apareciam fora da máquina
@@ -292,14 +323,16 @@ resolvidos ANTES de implementar, não depois (ADR-026/027/029/030).
 
 ## Próximo passo
 
-Camada de automação concluída e validada contra CI/CodeQL reais (verde em `b5ed2b3`).
-Fase 7 concluída — era a última fase da spec original. Não há próxima fase definida
-pela spec. Dois caminhos possíveis a partir daqui:
+**Backend formalmente liberado pro frontend** (2026-10-15) — 310 testes, revisão
+adversarial completa (15 bugs reais corrigidos, não só "os testes passam"), CI e
+CodeQL verdes contra o GitHub real, não só localmente. Fase 7 concluída — era a última
+fase da spec original. Não há próxima fase definida pela spec. Dois caminhos possíveis
+a partir daqui:
 
 1. **Construção da interface** pelo time de frontend, usando `docs/HANDOFF-FRONTEND.md` +
    `docs/openapi.json` como ponto de partida (este repositório continua só-backend).
-   **Liberado para começar** — backend estável, testado e com CI verde; só falta decidir
-   a stack do frontend (provavelmente algo Vercel-nativo, ex. Next.js ou Vite+React).
+   **Liberado para começar de verdade** — só falta decidir a stack do frontend
+   (provavelmente algo Vercel-nativo, ex. Next.js ou Vite+React).
 2. **Teste E2E real contra a AMAPI**, bloqueado pelas mesmas 3 pendências arquivadas desde
    a Fase 4/5 (nome real da enterprise AMAPI, tópico/subscription Pub/Sub, lista de
    filiais) — nenhuma resolvível pela equipe técnica sozinha, ver `docs/APRESENTACAO-GERENCIA.md`.
