@@ -1,7 +1,7 @@
 // Handler do `notificationType: 'ENROLLMENT'` (seção 8, Fase 4) — critério
 // de aceite explícito da fase: "enrollment de device de teste popula o
 // banco com o vínculo correto, sozinho".
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { androidmanagement_v1 } from 'googleapis';
 import type { db } from '../../../db/client.ts';
 import { enrollmentTokens } from '../../../db/schema/enrollment-tokens.ts';
@@ -77,21 +77,35 @@ export async function processarEnrollment(tx: Tx, device: Device): Promise<void>
 
   const additionalData = parsearAdditionalData(device.enrollmentTokenData);
 
-  const [token] = await tx
-    .select()
-    .from(enrollmentTokens)
-    .where(eq(enrollmentTokens.id, additionalData.tokenId))
-    .limit(1);
+  // Achado numa revisão: SELECT + checar `usadoEm` + UPDATE depois é
+  // check-then-act, não atômico — duas mensagens ENROLLMENT concorrentes
+  // pro MESMO token (ex.: redelivery sobrepondo o processamento original)
+  // podiam ambas passar pelo SELECT antes de qualquer UPDATE comitar, e as
+  // duas criarem um dispositivo cada. `oneTimeOnly: true` (seção 7) já
+  // impede isso do lado da AMAPI — isto aqui segue sendo defesa em
+  // profundidade, mas agora de verdade atômica: o UPDATE com `WHERE
+  // usado_em IS NULL` só afeta uma linha quando a reivindicação é a
+  // PRIMEIRA — sob o lock de linha do Postgres, uma segunda tentativa
+  // concorrente reavalia a condição depois que a primeira comita e não
+  // encontra mais `usado_em IS NULL`, então não afeta nenhuma linha.
+  const [tokenReclamado] = await tx
+    .update(enrollmentTokens)
+    .set({ usadoEm: new Date() })
+    .where(and(eq(enrollmentTokens.id, additionalData.tokenId), isNull(enrollmentTokens.usadoEm)))
+    .returning();
 
-  if (!token) {
-    throw new EnrollmentTokenInvalidoError(
-      `tokenId ${additionalData.tokenId} não encontrado em enrollment_tokens`,
-    );
-  }
-  if (token.usadoEm) {
-    // `oneTimeOnly: true` (seção 7) já impede reuso do lado da AMAPI — isto
-    // aqui é defesa em profundidade, não o mecanismo primário.
-    throw new EnrollmentTokenInvalidoError(`token ${token.id} já foi marcado como usado`);
+  if (!tokenReclamado) {
+    const [tokenExistente] = await tx
+      .select()
+      .from(enrollmentTokens)
+      .where(eq(enrollmentTokens.id, additionalData.tokenId))
+      .limit(1);
+    if (!tokenExistente) {
+      throw new EnrollmentTokenInvalidoError(
+        `tokenId ${additionalData.tokenId} não encontrado em enrollment_tokens`,
+      );
+    }
+    throw new EnrollmentTokenInvalidoError(`token ${tokenExistente.id} já foi marcado como usado`);
   }
 
   const dispositivo = await criarDispositivo(tx, {
@@ -107,18 +121,18 @@ export async function processarEnrollment(tx: Tx, device: Device): Promise<void>
     // linha de `enrollment_tokens` quando o token foi criado sem esses
     // dados (ex.: token genérico de estoque, vinculado depois via
     // `PATCH /devices/:id`).
-    patrimonio: additionalData.patrimonio ?? token.patrimonio ?? undefined,
-    colaboradorId: additionalData.colaboradorId ?? token.colaboradorId ?? undefined,
-    politicaId: token.politicaId ?? undefined,
+    patrimonio: additionalData.patrimonio ?? tokenReclamado.patrimonio ?? undefined,
+    colaboradorId: additionalData.colaboradorId ?? tokenReclamado.colaboradorId ?? undefined,
+    politicaId: tokenReclamado.politicaId ?? undefined,
   });
 
   await tx
     .update(enrollmentTokens)
-    .set({ usadoEm: new Date(), dispositivoId: dispositivo.id })
-    .where(eq(enrollmentTokens.id, token.id));
+    .set({ dispositivoId: dispositivo.id })
+    .where(eq(enrollmentTokens.id, tokenReclamado.id));
 
   logger.info(
-    { dispositivoId: dispositivo.id, amapiName: device.name, tokenId: token.id },
+    { dispositivoId: dispositivo.id, amapiName: device.name, tokenId: tokenReclamado.id },
     'ENROLLMENT: dispositivo provisionado e vinculado',
   );
 }

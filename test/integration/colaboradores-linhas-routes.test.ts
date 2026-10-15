@@ -163,6 +163,36 @@ describe('/colaboradores', () => {
     });
     expect(response.statusCode).toBe(404);
   });
+
+  // Achado numa revisão: sem escapar, `%` no termo de busca é wildcard do
+  // ILIKE, não caractere literal — buscar por "100%" batia em qualquer
+  // nome contendo "100" seguido de QUALQUER COISA, não só em quem tem o
+  // "%" de verdade no nome. Este teste prova a diferença: busca por "100%"
+  // tem que achar só quem tem o "%" literal, nunca "100X...".
+  it('busca por "%" literal não vira wildcard — só acha quem tem o caractere de verdade', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/colaboradores',
+      headers: authHeader('ADMIN'),
+      payload: { matricula: `mat-pct-${Date.now()}`, nome: '100% Aprovado' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/colaboradores',
+      headers: authHeader('ADMIN'),
+      payload: { matricula: `mat-pct2-${Date.now()}`, nome: '100X Aprovado' },
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/colaboradores?busca=${encodeURIComponent('100%')}`,
+      headers: authHeader('ADMIN'),
+    });
+    expect(response.statusCode).toBe(200);
+    const nomes = response.json<{ itens: { nome: string }[] }>().itens.map((c) => c.nome);
+    expect(nomes).toContain('100% Aprovado');
+    expect(nomes).not.toContain('100X Aprovado');
+  });
 });
 
 describe('/linhas', () => {

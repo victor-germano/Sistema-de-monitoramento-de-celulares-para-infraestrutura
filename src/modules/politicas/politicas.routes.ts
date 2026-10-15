@@ -22,6 +22,7 @@ import { registrarAuditoria } from '../../domain/auditoria/registrar.ts';
 import { sendProblem } from '../../shared/problem-details.ts';
 import { logger } from '../../shared/logger.ts';
 import { zQueryBoolean } from '../../shared/zod-query.ts';
+import { escaparTermoBusca } from '../../shared/sql-like.ts';
 import { withRole } from '../../plugins/rbac.ts';
 
 // Corpo do payload é o `Policy` inteiro da AMAPI — schema tão grande e
@@ -236,7 +237,9 @@ export function registerPoliticaRoutes(app: FastifyInstance): void {
     { ...withRole(...ROLES_LEITURA), schema: { querystring: listarQuerySchema } },
     async (request, reply) => {
       const condicoes = [];
-      if (request.query.busca) condicoes.push(ilike(politicas.nome, `%${request.query.busca}%`));
+      if (request.query.busca) {
+        condicoes.push(ilike(politicas.nome, `%${escaparTermoBusca(request.query.busca)}%`));
+      }
       if (request.query.ativa !== undefined)
         condicoes.push(eq(politicas.ativa, request.query.ativa));
 

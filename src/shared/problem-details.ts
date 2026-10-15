@@ -33,11 +33,33 @@ export function sendProblem(
   return reply.status(status).type('application/problem+json').send(body);
 }
 
+// SQLSTATE 23505 = unique_violation — código padrão do Postgres, devolvido
+// pelo driver `postgres` (não um status HTTP nosso). Checagem estrutural
+// (não `instanceof`) porque o tipo exato da classe de erro do driver não é
+// exportado como algo que faça sentido importar aqui.
+function ehViolacaoDeUnicidade(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === '23505';
+}
+
 export function errorHandler(
   error: FastifyError,
   request: FastifyRequest,
   reply: FastifyReply,
 ): void {
+  // Achado numa revisão: algumas rotas checam duplicidade (matrícula,
+  // número de linha, patrimônio) ANTES de inserir/atualizar — mas entre
+  // esse check e a escrita existe uma janela de corrida real (duas
+  // requisições concorrentes podem as duas passar o check). Essa é a
+  // defesa de ÚLTIMA linha, sistêmica: qualquer violação de unicidade do
+  // Postgres que escape de um check prévio vira 409 aqui, pra TODA rota,
+  // sem precisar que cada uma trate isso individualmente — nunca um 500
+  // genérico pra um conflito de dado duplicado.
+  if (ehViolacaoDeUnicidade(error)) {
+    request.log.warn({ err: error }, 'violação de unicidade (23505) tratada como 409');
+    sendProblem(reply, 409, 'Registro duplicado', 'Já existe um registro com esse valor único.');
+    return;
+  }
+
   const status = error.statusCode ?? 500;
   if (status >= 500) {
     request.log.error({ err: error }, 'erro não tratado');

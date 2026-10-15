@@ -2,6 +2,7 @@ import { and, eq, gt, ilike, isNull, lt, notInArray, or } from 'drizzle-orm';
 import { db } from '../../db/client.ts';
 import { dispositivos, dispositivoApps } from '../../db/schema/dispositivos.ts';
 import { colaboradores } from '../../db/schema/colaboradores.ts';
+import { escaparTermoBusca } from '../../shared/sql-like.ts';
 
 export type Dispositivo = typeof dispositivos.$inferSelect;
 export type NovoDispositivo = typeof dispositivos.$inferInsert;
@@ -210,7 +211,7 @@ export async function listarDispositivos(
     );
   }
   if (filtros.busca) {
-    const termo = `%${filtros.busca}%`;
+    const termo = `%${escaparTermoBusca(filtros.busca)}%`;
     condicoes.push(
       or(
         ilike(dispositivos.patrimonio, termo),
