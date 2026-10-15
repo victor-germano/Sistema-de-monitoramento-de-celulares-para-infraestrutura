@@ -1,0 +1,142 @@
+# Render Blueprint — infraestrutura como código pro backend (API + 3
+# workers). Descreve os 4 processos de docs/ARQUITETURA.md como serviços
+# separados, cada um com a RESTRIÇÃO DE RÉPLICA que docs/OPERACAO.md exige
+# (só api e worker-pubsub podem escalar; os outros dois quebram garantias de
+# correção se rodarem em mais de 1 instância — ver comentário em cada um).
+#
+# IMPORTANTE antes do primeiro deploy: valide este arquivo no dashboard do
+# Render (New → Blueprint, apontando pra este repositório) ANTES de aplicar —
+# a sintaxe exata de alguns campos (principalmente o serviço `redis` como
+# managed database) pode ter mudado desde que este arquivo foi escrito
+# (2026-10); o Render avisa no próprio preview se algo não bater com a
+# versão atual da API deles. Nenhum destes serviços foi implantado contra
+# uma conta Render real ainda.
+#
+# O domínio da empresa (ex.: api.gruporoveri.com.br) é configurado depois,
+# no dashboard do serviço `mdm-api` (Settings → Custom Domain) — aponta um
+# CNAME pro host que o Render atribuir. O FRONTEND (quando existir) é quem
+# vai pro Vercel com o domínio principal (ex.: painel.gruporoveri.com.br) —
+# ver nota em docs/OPERACAO.md.
+
+databases:
+  - name: mdm-postgres
+    databaseName: mdm
+    user: app
+    plan: starter
+
+services:
+  - type: redis
+    name: mdm-redis
+    plan: starter
+    ipAllowList: [] # só os serviços deste blueprint acessam, não a internet
+
+  - type: web
+    name: mdm-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVarGroups:
+      - mdm-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: mdm-postgres, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: mdm-redis, type: redis, property: connectionString }
+
+  - type: worker
+    name: mdm-worker-pubsub
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: node dist/workers/pubsub-consumer.js
+    plan: starter
+    envVarGroups:
+      - mdm-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: mdm-postgres, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: mdm-redis, type: redis, property: connectionString }
+    # Pode ter mais de 1 instância com segurança (redundância/throughput) —
+    # é o único worker pra que isso vale, ver docs/ARQUITETURA.md.
+
+  - type: worker
+    name: mdm-worker-policy-write
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: node dist/workers/policy-write-worker.js
+    plan: starter
+    envVarGroups:
+      - mdm-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: mdm-postgres, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: mdm-redis, type: redis, property: connectionString }
+    # NUNCA definir mais de 1 instância/réplica deste serviço no dashboard —
+    # `concurrency: 1` só serializa escrita de política DENTRO de um
+    # processo; 2 instâncias quebram a garantia contra o rate limit da AMAPI
+    # (ver docs/OPERACAO.md, tabela "Os 4 processos em produção").
+
+  - type: worker
+    name: mdm-worker-manutencao
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: node dist/workers/manutencao-worker.js
+    plan: starter
+    envVarGroups:
+      - mdm-shared
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: mdm-postgres, property: connectionString }
+      - key: REDIS_URL
+        fromService: { name: mdm-redis, type: redis, property: connectionString }
+    # Mesma restrição do worker acima: exatamente 1 instância (senão dobra
+    # scan periódico e purga LGPD à toa).
+
+envVarGroups:
+  - name: mdm-shared
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      # Preencher no dashboard com o domínio real do frontend (Vercel) —
+      # sem isso o CORS bloqueia toda chamada do painel.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: OIDC_ISSUER
+        value: https://accounts.google.com
+      - key: OIDC_CLIENT_ID
+        sync: false
+      - key: OIDC_CLIENT_SECRET
+        sync: false
+      # https://api.gruporoveri.com.br/auth/callback — ajustar ao domínio
+      # real definido no Custom Domain do serviço mdm-api.
+      - key: OIDC_REDIRECT_URI
+        sync: false
+      # URL do painel no Vercel (domínio da empresa) — pra onde /auth/callback
+      # redireciona depois do login (ADR-010).
+      - key: FRONTEND_URL
+        sync: false
+      - key: ALLOWED_EMAIL_DOMAINS
+        value: gruporoveri.com.br
+      - key: BOOTSTRAP_ADMIN_EMAILS
+        sync: false
+      # Render gera um segredo forte sozinho, único por ambiente — nunca
+      # reutilizar entre staging/produção (ver docs/OPERACAO.md).
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AMAPI_ENTERPRISE_NAME
+        sync: false
+      # Aponta pro arquivo de um "Secret File" do Render (Dashboard do
+      # serviço → Environment → Secret Files) — o JSON da service account
+      # NUNCA é commitado nem vai como env var de texto plano.
+      - key: AMAPI_SERVICE_ACCOUNT_KEY_PATH
+        value: /etc/secrets/amapi-service-account.json
+      - key: GOOGLE_CLOUD_PROJECT
+        sync: false
+      - key: PUBSUB_SUBSCRIPTION
+        sync: false
+      - key: RETENCAO_EVENTOS_BRUTOS_DIAS
+        value: '180'

@@ -105,6 +105,12 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 
 ## Estado atual
 
+**Camada de automação (pós-Fase 7): concluída.** CI (lint/format/typecheck/build/testes/
+deriva do openapi.json) no GitHub Actions, pre-commit hooks (husky+lint-staged),
+Dependabot, CodeQL, exportação Excel do dashboard e `render.yaml` como
+infraestrutura-como-código pro deploy real (Render pro backend, Vercel reservado pro
+frontend). Ver entrada datada abaixo para o detalhe completo.
+
 **Fase 7 — Documentação de handoff: concluída.**
 
 Os 6 entregáveis da Fase 7 existem em `docs/`: `openapi.json` (gerado do código, não
@@ -283,7 +289,7 @@ resolvidos ANTES de implementar, não depois (ADR-026/027/029/030).
 
 ## Próximo passo
 
-Fase 7 concluída — era a última fase da spec original. Não há próxima fase definida pela
+Camada de automação concluída. Fase 7 concluída — era a última fase da spec original. Não há próxima fase definida pela
 spec. Dois caminhos possíveis a partir daqui, nenhum iniciado:
 
 1. **Construção da interface** pelo time de frontend, usando `docs/HANDOFF-FRONTEND.md` +
@@ -849,3 +855,117 @@ tópico/subscription Pub/Sub, lista de filiais) — nenhuma delas bloqueia o que
 entrega, só bloqueiam teste E2E real. Novas, registradas dentro dos próprios documentos
 desta fase (não pendência de código): base legal/retenção/processo de titular (LGPD),
 definição de deploy dos workers (OPERACAO), rota de enrollment (HANDOFF-FRONTEND).
+
+---
+
+### 2026-10-14 — Camada de automação (CI/CD, segurança, exportação Excel)
+
+**Solicitação original:** depois da Fase 7, o Victor pediu pra automatizar o máximo
+possível do processo — contexto explícito: este projeto vai se tornar um produto real
+da empresa, e ele quer usar isso pra demonstrar maturidade técnica pra coordenadores/
+gerentes. Pediu explicação detalhada de cada passo (primeira vez com esse tipo de
+projeto).
+
+**Status:** Concluída.
+
+**O que foi realizado:**
+
+- **CI** (`.github/workflows/ci.yml`) — 3 jobs paralelos a cada push/PR na main:
+  qualidade (lint/format/typecheck/build), suíte de testes completa (Testcontainers,
+  roda no runner `ubuntu-latest` sem configuração extra), e um job dedicado que
+  regenera `docs/openapi.json` e falha se divergir do committed — nunca mais fica
+  desatualizado em silêncio.
+- **Pre-commit hooks** (husky + lint-staged) — testado de verdade (`npx lint-staged`
+  contra arquivo staged real). Deliberadamente NÃO roda a suíte de testes no hook (ela
+  sobe Testcontainers, levaria minutos) — só lint/format nos arquivos alterados.
+- **Dependabot** (`.github/dependabot.yml`) — PRs semanais, agrupados por tipo
+  (produção/dev, patch/minor juntos; major sempre separado).
+- **CodeQL** (`.github/workflows/codeql.yml`) — varredura semanal + a cada push/PR,
+  complementar ao `npm audit` (olha padrão de bug no NOSSO código, não só CVE de
+  dependência).
+- **`npm audit`**: 26 vulnerabilidades encontradas ao instalar husky/lint-staged. Corrigi
+  as 6 sem breaking change (`npm audit fix`, sem `--force`) — caiu pra 20 (depois 21 com
+  o `exceljs`, mesma cadeia de `uuid`/`dockerode` já existente, não uma vulnerabilidade
+  nova). As restantes exigem upgrade de versão maior (**`drizzle-orm` tem uma falha real
+  de SQL injection, corrigida só na 0.45.4** — a mais séria) — deliberadamente NÃO
+  forçadas nesta sessão (upgrade de ORM pode mudar comportamento sutil, merece suíte
+  completa rodada depois, não no meio de outra tarefa). Registrado como próxima tarefa
+  dedicada.
+- **`GET /dashboard/export`** — exportação do dashboard em `.xlsx` (biblioteca
+  `exceljs`), aditivo ao `GET /dashboard` JSON existente (nunca um substituto). Mesmo
+  RBAC. Teste de integração novo faz round-trip real: carrega o `.xlsx` retornado e
+  confere o número contra o `/dashboard` JSON, não só status code/headers.
+- **`render.yaml`** — infraestrutura-como-código pro deploy real do backend (API + 3
+  workers) no Render, com a restrição de réplica de `docs/OPERACAO.md` documentada
+  inline em cada worker. **Achado importante durante esta conversa:** o Victor queria
+  Vercel pra tudo, mas Vercel não serve pra processo de vida longa (os 3 workers,
+  principalmente o consumer Pub/Sub, que mantém uma subscription pull aberta o tempo
+  todo) — sinalizado antes de implementar, decisão final: Vercel fica só com o
+  frontend (futuro, domínio principal da empresa), backend vai pro Render (subdomínio
+  `api.`). `docs/OPERACAO.md` atualizado com essa decisão e o motivo técnico.
+- Suíte completa revalidada no final: 28 arquivos, **283 testes, todos passando**
+  (195s). Um `ECONNRESET` no stderr durante teardown de uma conexão BullMQ — ruído
+  benigno de fechamento de conexão, não falha (confirmado pelo exit code 0 e teste
+  correspondente passando).
+- **Commits separados por tema** (pedido explícito do Victor, "como o projeto já faz"):
+  4 commits — Fase 7 (docs), CI/hooks/segurança, feature Excel, deploy Render. Exigiu
+  reconstruir estados intermediários de arquivos tocados por mais de um tema
+  (`package.json`/`package-lock.json` via uninstall/reinstall real de pacotes,
+  `docs/OPERACAO.md`/`HANDOFF-FRONTEND.md`/`PROJECT_MEMORY.md` via reversão e
+  reaplicação manual dos trechos) — cada commit intermediário foi revalidado
+  (typecheck/lint/build) isoladamente antes de ser criado, não só o estado final.
+
+**Arquivos criados:** `.github/workflows/{ci,codeql}.yml`; `.github/dependabot.yml`;
+`.husky/pre-commit`; `render.yaml`; `src/domain/dashboard/exportar-excel.ts`.
+
+**Arquivos alterados:** `package.json` (scripts `prepare`/lint-staged config,
+dependências `husky`/`lint-staged`/`exceljs`), `package-lock.json`,
+`src/modules/dashboard/dashboard.routes.ts` (rota `/dashboard/export`),
+`test/integration/alertas-dashboard-routes.test.ts` (testes da rota nova),
+`docs/api/dashboard.md`, `docs/HANDOFF-FRONTEND.md`, `docs/OPERACAO.md`, `README.md`,
+este arquivo.
+
+**Arquivos removidos:** nenhum.
+
+**Funcionalidades afetadas:** nenhuma rota existente mudou comportamento — só adição
+(`/dashboard/export` é rota nova) e atualização de dependências sem breaking change.
+
+**Impacto da alteração:** nenhuma regressão — suíte completa revalidada no final, não
+só o arquivo tocado.
+
+**Validação realizada:**
+
+- `npm run typecheck`/`lint`/`build`/`format:check` — limpos. Um atrito de tipagem real
+  encontrado e documentado: `node_modules/exceljs/index.d.ts` declara globalmente
+  `interface Buffer extends ArrayBuffer {}`, contaminando o tipo `Buffer` do projeto
+  inteiro com um shape contraditório (bug conhecido da biblioteca) — resolvido com
+  `@ts-expect-error` pontual e documentado no teste, não com um cast que não
+  resolveria o problema de verdade.
+- `npm test` completo — 283/283 passando.
+- Teste do hook de pre-commit rodado de propósito contra um arquivo staged real antes
+  de considerar "feito".
+- Cada um dos 4 commits temáticos revalidado isoladamente (typecheck/lint/build) antes
+  de ser criado — não só o diff final.
+- `openapi.json`/CI/Dependabot/CodeQL/`render.yaml` **não foram testados contra uma
+  conta GitHub Actions/Render real** — são configuração que só se valida de fato no
+  primeiro push/PR real e no primeiro deploy real, respectivamente. Avisado
+  explicitamente ao Victor, principalmente no `render.yaml` (sintaxe de alguns campos
+  pode ter mudado desde que foi escrito).
+
+**Problemas encontrados:** nenhum bug de lógica de negócio. Um atrito de tipagem de
+terceiro (exceljs, ver acima) e uma vulnerabilidade real de segurança pré-existente
+encontrada (SQL injection no `drizzle-orm` < 0.45.4) — nenhuma introduzida por este
+trabalho, ambas documentadas, não ambas corrigidas (a segunda é pendência deliberada).
+
+**Pendências futuras:**
+
+1. **Upgrade de dependências com breaking change** — principalmente `drizzle-orm`
+   (SQL injection real), também `vitest`/`drizzle-kit`/`@fastify/swagger-ui`/
+   `testcontainers`. Requer rodar a suíte completa depois de cada upgrade, não em lote.
+2. **Validar `render.yaml` contra uma conta Render real** antes do primeiro deploy —
+   nunca foi testado contra a API real da plataforma.
+3. **Preencher os segredos marcados `sync: false`** no Render (OIDC, AMAPI, etc.) e
+   subir o JSON da service account como Secret File — nenhum deles pode ir no
+   `render.yaml` em texto plano.
+4. Pendências já listadas nas entradas anteriores (enterprise AMAPI real, Pub/Sub,
+   filiais, construção do frontend) continuam de pé, inalteradas.

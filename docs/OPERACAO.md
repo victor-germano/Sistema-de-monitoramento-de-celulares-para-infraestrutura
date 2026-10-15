@@ -18,19 +18,43 @@ Setup de ambiente de desenvolvimento está em `docs/SETUP.md`, não repetido aqu
 orquestrador (K8s, etc.) tiver autoscaling genérico ligado "pra tudo", trave manualmente
 os workers de política e manutenção em `replicas: 1`.
 
-### Lacuna conhecida: não existe deploy destes 4 processos hoje
+### Onde isso roda em produção: Render (backend) + Vercel (frontend)
 
-O `docker-compose.yml` deste repositório só define o serviço `api` — não existem
-serviços para os 3 workers. Isso é **esperado nesta fase** (o compose aqui é pensado
-pra desenvolvimento/validação local, não pra produção), mas significa que antes do
-primeiro deploy real alguém precisa:
+O `docker-compose.yml` deste repositório só define o serviço `api` — é pensado pra
+desenvolvimento/validação local, nunca foi o plano de produção. Decisão tomada: o
+**backend (API + 3 workers) roda no Render**, descrito como infraestrutura-como-código
+em [`render.yaml`](../render.yaml) na raiz do repositório — um serviço por processo da
+tabela acima, cada um já com a imagem Docker existente (só muda o `dockerCommand`) e os
+limites de réplica corretos documentados inline no próprio arquivo.
 
-1. Decidir o orquestrador de produção (K8s, ECS, Docker Compose num VM só, etc.).
-2. Criar 1 deployment/serviço por processo da tabela acima, cada um com o `CMD` certo
-   (a mesma imagem Docker serve pros 4 — só muda o comando: `node dist/server.js` vs.
-   os equivalentes compilados dos scripts `worker:*`, que hoje rodam via `tsx` em dev
-   e precisam de uma entrada em `dist/` depois do `npm run build`).
-3. Garantir os limites de réplica acima (1 para política/manutenção).
+**O domínio da empresa (`gruporoveri.com.br`) fica dividido:**
+
+- O **frontend** (quando existir) vai pro **Vercel**, com o domínio principal (ex.:
+  `painel.gruporoveri.com.br`) — é o uso natural do Vercel, com deploy automático a
+  cada push e preview por PR de graça.
+- O **backend** fica num subdomínio separado no Render (ex.:
+  `api.gruporoveri.com.br`), configurado em Settings → Custom Domain do serviço
+  `mdm-api` no dashboard do Render.
+
+**Por que não dá pra colocar os workers no Vercel:** o Vercel só executa funções
+serverless de curta duração — nenhum dos 3 workers cabe nesse modelo, porque todos são
+processos de vida longa por natureza: `worker:pubsub` mantém uma conexão de assinatura
+pull aberta o tempo todo (não é algo que "termina e retorna uma resposta"),
+`worker:policy-write` e `worker:manutencao` dependem de um processo persistente rodando
+em segundo plano. Só a API HTTP (`mdm-api`) teria, em tese, esse formato request/response
+compatível com serverless — mas separar só ela pro Vercel criaria dois lugares de deploy
+pro mesmo conjunto de código, sem ganho real; mantê-la junto dos workers no Render evita
+essa fragmentação.
+
+**Antes do primeiro deploy real**, confira no dashboard do Render:
+
+1. Validar o `render.yaml` (New → Blueprint, apontando pro repositório) — a sintaxe de
+   alguns campos pode mudar entre versões da plataforma, o arquivo tem um aviso sobre
+   isso no topo.
+2. Preencher manualmente os valores marcados `sync: false` no `envVarGroups` (segredos
+   OIDC, nome da enterprise AMAPI, etc. — nunca ficam no `render.yaml` em texto plano).
+3. Subir o JSON da service account da AMAPI como um **Secret File** do serviço
+   `mdm-api` (nunca como env var de texto nem commitado).
 
 ## Variáveis de ambiente em produção
 
