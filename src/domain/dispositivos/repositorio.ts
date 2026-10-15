@@ -45,13 +45,24 @@ export async function buscarDispositivoPorPatrimonio(
   return dispositivo;
 }
 
-export async function buscarDispositivoPorId(id: string): Promise<Dispositivo | undefined> {
-  const [dispositivo] = await db
-    .select()
+/**
+ * Achado numa revisão: faltava o mesmo `leftJoin` com `colaboradores` que
+ * `listarDispositivos` já faz — `GET /devices/:id` devolvia `colaboradorNome`
+ * ausente mesmo para um dispositivo com colaborador vinculado, inconsistente
+ * com `GET /devices` pro mesmo registro (docs/api/devices.md documenta o
+ * mesmo formato de resposta pras duas rotas).
+ */
+export async function buscarDispositivoPorId(
+  id: string,
+): Promise<ItemListaDispositivo | undefined> {
+  const [linha] = await db
+    .select({ dispositivo: dispositivos, colaboradorNome: colaboradores.nome })
     .from(dispositivos)
+    .leftJoin(colaboradores, eq(dispositivos.colaboradorId, colaboradores.id))
     .where(eq(dispositivos.id, id))
     .limit(1);
-  return dispositivo;
+  if (!linha) return undefined;
+  return { ...linha.dispositivo, colaboradorNome: linha.colaboradorNome };
 }
 
 export async function criarDispositivo(

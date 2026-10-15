@@ -171,6 +171,37 @@ describe('GET /devices/:id', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json<{ id: string }>().id).toBe(dispositivoId);
   });
+
+  // Achado verificando a tela de detalhe do frontend: `buscarDispositivoPorId`
+  // não fazia o mesmo `leftJoin` com `colaboradores` que `listarDispositivos`
+  // já fazia — o mesmo dispositivo aparecia com o nome do colaborador em
+  // `GET /devices`, mas vazio em `GET /devices/:id`.
+  it('inclui colaboradorNome quando o dispositivo tem colaborador vinculado — mesmo formato de GET /devices', async () => {
+    const { colaboradores } = await import('../../src/db/schema/colaboradores.ts');
+    const [colaborador] = await db
+      .insert(colaboradores)
+      .values({ matricula: 'MAT-GETID', nome: 'Colaborador de Teste' })
+      .returning();
+    if (!colaborador) throw new Error('falha ao semear colaborador');
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/devices/${dispositivoId}`,
+      headers: authHeader('ADMIN'),
+      payload: { colaboradorId: colaborador.id },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/devices/${dispositivoId}`,
+      headers: authHeader('VIEWER'),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ colaboradorNome: string | null }>().colaboradorNome).toBe(
+      'Colaborador de Teste',
+    );
+  });
 });
 
 describe('PATCH /devices/:id', () => {
