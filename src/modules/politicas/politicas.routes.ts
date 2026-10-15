@@ -5,7 +5,7 @@
 // verdade contra a AMAPI, mesmo com vários processos de API atrás de um
 // load balancer.
 import { and, desc, eq, ilike } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { db } from '../../db/client.ts';
@@ -13,7 +13,10 @@ import { politicas, politicasVersoes } from '../../db/schema/politicas.ts';
 import { dispositivos } from '../../db/schema/dispositivos.ts';
 import { nomeEnterprise } from '../../integrations/amapi/client.ts';
 import { excluirPolitica, type PolicyPayload } from '../../integrations/amapi/policies.ts';
-import { executarEscritaPoliticaSincrona } from '../../queues/policy-write-queue.ts';
+import {
+  executarEscritaPoliticaSincrona,
+  EscritaPoliticaTimeoutError,
+} from '../../queues/policy-write-queue.ts';
 import { aplicarInvariantesComAuditoria } from '../../domain/policy/policy-invariants.ts';
 import { registrarAuditoria } from '../../domain/auditoria/registrar.ts';
 import { sendProblem } from '../../shared/problem-details.ts';
@@ -76,6 +79,152 @@ async function aplicarInvariantesEAuditar(
     });
   }
   return policy;
+}
+
+/**
+ * Responde ao timeout da escrita (`EscritaPoliticaTimeoutError`) — nunca
+ * trata como falha confirmada, porque não é: o job continua rodando em
+ * segundo plano (ver `aposTimeout` passado a `executarEscritaPoliticaSincrona`
+ * em cada rota, responsável por persistir o resultado real quando chegar).
+ */
+function respostaDeTimeout(
+  reply: FastifyReply,
+  politicaId: string,
+  erro: EscritaPoliticaTimeoutError,
+) {
+  logger.warn(
+    { err: erro, politicaId },
+    'timeout esperando escrita de política — resultado real será reconciliado quando o job terminar',
+  );
+  return reply.status(202).send({
+    politicaId,
+    status: 'processando',
+    mensagem: erro.message,
+  });
+}
+
+/**
+ * UPDATE da política + INSERT em `politicas_versoes` + auditoria numa
+ * transação SÓ — achado numa revisão: antes eram 3 awaits sequenciais sem
+ * transação; uma falha entre eles deixava a política reportando payload/
+ * versão novos sem a linha de histórico correspondente (quebra a garantia
+ * append-only de `politicas_versoes`).
+ */
+async function persistirPoliticaNovaAposSucesso(
+  politicaId: string,
+  amapiName: string,
+  payloadFinal: PolicyPayload,
+  ator: { id: string; email: string },
+  ip: string | undefined,
+  userAgent: string | undefined,
+) {
+  return db.transaction(async (tx) => {
+    const [atualizada] = await tx
+      .update(politicas)
+      .set({ amapiName, payload: payloadFinal })
+      .where(eq(politicas.id, politicaId))
+      .returning();
+    if (!atualizada) throw new Error('política não encontrada ao persistir criação bem-sucedida');
+    await tx.insert(politicasVersoes).values({
+      politicaId,
+      versao: 1,
+      payload: payloadFinal,
+      criadoPor: ator.id,
+    });
+    await registrarAuditoria(tx, {
+      ator,
+      acao: 'POLITICA_CRIADA',
+      entidade: 'politica',
+      entidadeId: politicaId,
+      ip,
+      userAgent,
+    });
+    return atualizada;
+  });
+}
+
+/**
+ * Desfaz o INSERT especulativo (sem `politicas_versoes` gravado ainda,
+ * apagar aqui não deixa histórico órfão) — uma política só existe pra valer
+ * quando existe nos dois lados (nosso banco E a AMAPI).
+ */
+async function persistirFalhaPoliticaNova(politicaId: string, erro: unknown): Promise<void> {
+  await db.delete(politicas).where(eq(politicas.id, politicaId));
+  logger.error({ err: erro, politicaId }, 'falha ao enviar política nova pra AMAPI');
+}
+
+/** Mesmo princípio de `persistirPoliticaNovaAposSucesso`, pro PATCH (sem `amapiName` novo). */
+async function persistirPoliticaAtualizadaAposSucesso(
+  politicaId: string,
+  novaVersao: number,
+  payloadFinal: PolicyPayload,
+  camposAdministrativos: { descricao?: string | null; ativa?: boolean },
+  ator: { id: string; email: string },
+  ip: string | undefined,
+  userAgent: string | undefined,
+) {
+  return db.transaction(async (tx) => {
+    const [atualizada] = await tx
+      .update(politicas)
+      .set({ ...camposAdministrativos, payload: payloadFinal, versao: novaVersao })
+      .where(eq(politicas.id, politicaId))
+      .returning();
+    if (!atualizada)
+      throw new Error('política não encontrada ao persistir atualização bem-sucedida');
+    await tx.insert(politicasVersoes).values({
+      politicaId,
+      versao: novaVersao,
+      payload: payloadFinal,
+      criadoPor: ator.id,
+    });
+    await registrarAuditoria(tx, {
+      ator,
+      acao: 'POLITICA_ATUALIZADA',
+      entidade: 'politica',
+      entidadeId: politicaId,
+      detalhes: { versao: novaVersao },
+      ip,
+      userAgent,
+    });
+    return atualizada;
+  });
+}
+
+/** Mesmo princípio, pro rollback (histórico marcado com `diffResumo`). */
+async function persistirRollbackAposSucesso(
+  politicaId: string,
+  novaVersao: number,
+  payloadFinal: PolicyPayload,
+  versaoRestaurada: number,
+  ator: { id: string; email: string },
+  ip: string | undefined,
+  userAgent: string | undefined,
+) {
+  return db.transaction(async (tx) => {
+    const [atualizada] = await tx
+      .update(politicas)
+      .set({ payload: payloadFinal, versao: novaVersao })
+      .where(eq(politicas.id, politicaId))
+      .returning();
+    if (!atualizada) throw new Error('política não encontrada ao persistir rollback bem-sucedido');
+    await tx.insert(politicasVersoes).values({
+      politicaId,
+      versao: novaVersao,
+      payload: payloadFinal,
+      diffResumo: `rollback pra versão ${versaoRestaurada}`,
+      criadoPor: ator.id,
+    });
+    await registrarAuditoria(tx, {
+      ator,
+      acao: 'POLITICA_ROLLBACK',
+      entidade: 'politica',
+      entidadeId: politicaId,
+      detalhes: { versaoRestaurada, novaVersao },
+      ip,
+      userAgent,
+    });
+    return atualizada;
+  });
 }
 
 export function registerPoliticaRoutes(app: FastifyInstance): void {
@@ -167,49 +316,50 @@ export function registerPoliticaRoutes(app: FastifyInstance): void {
         request.headers['user-agent'],
       );
 
-      let payloadFinal: PolicyPayload;
+      const ip = request.ip;
+      const userAgent = request.headers['user-agent'];
+
       try {
-        payloadFinal = await executarEscritaPoliticaSincrona({
-          nomePolitica: amapiName,
-          payload: payloadCorrigido,
-        });
-      } catch (erro) {
-        // Desfaz o INSERT local — sem `politicas_versoes` gravado ainda,
-        // apagar aqui não deixa nenhum histórico órfão pra trás. Uma
-        // política só existe pra valer quando existe nos dois lados
-        // (nosso banco E a AMAPI); uma linha local sem `amapiName` seria um
-        // estado inconsistente que `PATCH`/`DELETE` não sabem tratar.
-        await db.delete(politicas).where(eq(politicas.id, politica.id));
-        logger.error(
-          { err: erro, politicaId: politica.id },
-          'falha ao enviar política nova pra AMAPI',
+        const payloadFinal = await executarEscritaPoliticaSincrona(
+          { nomePolitica: amapiName, payload: payloadCorrigido },
+          {
+            // Reconciliação tardia: se o timeout disparar mas o job
+            // terminar depois (sucesso OU falha), persiste do mesmo jeito
+            // que persistiria se tivesse dado tempo — nunca deixa uma
+            // política real na AMAPI sem registro local (ADR-023 na
+            // direção inversa), nem o INSERT especulativo órfão pra sempre.
+            aposTimeout: (resultado) => {
+              if (resultado.status === 'sucesso') {
+                void persistirPoliticaNovaAposSucesso(
+                  politica.id,
+                  amapiName,
+                  resultado.payload,
+                  ator,
+                  ip,
+                  userAgent,
+                );
+              } else {
+                void persistirFalhaPoliticaNova(politica.id, resultado.erro);
+              }
+            },
+          },
         );
+        const politicaAtualizada = await persistirPoliticaNovaAposSucesso(
+          politica.id,
+          amapiName,
+          payloadFinal,
+          ator,
+          ip,
+          userAgent,
+        );
+        return reply.status(201).send(politicaAtualizada);
+      } catch (erro) {
+        if (erro instanceof EscritaPoliticaTimeoutError) {
+          return respostaDeTimeout(reply, politica.id, erro);
+        }
+        await persistirFalhaPoliticaNova(politica.id, erro);
         return sendProblem(reply, 502, 'Falha ao salvar política na AMAPI', String(erro));
       }
-
-      const [politicaAtualizada] = await db
-        .update(politicas)
-        .set({ amapiName, payload: payloadFinal })
-        .where(eq(politicas.id, politica.id))
-        .returning();
-
-      await db.insert(politicasVersoes).values({
-        politicaId: politica.id,
-        versao: 1,
-        payload: payloadFinal,
-        criadoPor: ator.id,
-      });
-
-      await registrarAuditoria(db, {
-        ator,
-        acao: 'POLITICA_CRIADA',
-        entidade: 'politica',
-        entidadeId: politica.id,
-        ip: request.ip,
-        userAgent: request.headers['user-agent'],
-      });
-
-      return reply.status(201).send(politicaAtualizada);
     },
   );
 
@@ -267,50 +417,58 @@ export function registerPoliticaRoutes(app: FastifyInstance): void {
         request.headers['user-agent'],
       );
 
-      let payloadFinal: PolicyPayload;
+      const novaVersao = politica.versao + 1;
+      const camposAdministrativos = {
+        descricao: request.body.descricao ?? politica.descricao,
+        ativa: request.body.ativa ?? politica.ativa,
+      };
+      const ip = request.ip;
+      const userAgent = request.headers['user-agent'];
+
       try {
-        payloadFinal = await executarEscritaPoliticaSincrona({
-          nomePolitica: politica.amapiName,
-          payload: payloadCorrigido,
-        });
+        const payloadFinal = await executarEscritaPoliticaSincrona(
+          { nomePolitica: politica.amapiName, payload: payloadCorrigido },
+          {
+            aposTimeout: (resultado) => {
+              if (resultado.status === 'sucesso') {
+                void persistirPoliticaAtualizadaAposSucesso(
+                  politica.id,
+                  novaVersao,
+                  resultado.payload,
+                  camposAdministrativos,
+                  ator,
+                  ip,
+                  userAgent,
+                );
+              } else {
+                logger.error(
+                  { err: resultado.erro, politicaId: politica.id },
+                  'falha ao atualizar política na AMAPI (reconciliação tardia pós-timeout)',
+                );
+              }
+            },
+          },
+        );
+        const atualizada = await persistirPoliticaAtualizadaAposSucesso(
+          politica.id,
+          novaVersao,
+          payloadFinal,
+          camposAdministrativos,
+          ator,
+          ip,
+          userAgent,
+        );
+        return reply.send(atualizada);
       } catch (erro) {
+        if (erro instanceof EscritaPoliticaTimeoutError) {
+          return respostaDeTimeout(reply, politica.id, erro);
+        }
         logger.error(
           { err: erro, politicaId: politica.id },
           'falha ao atualizar política na AMAPI',
         );
         return sendProblem(reply, 502, 'Falha ao salvar política na AMAPI', String(erro));
       }
-
-      const novaVersao = politica.versao + 1;
-      const [atualizada] = await db
-        .update(politicas)
-        .set({
-          descricao: request.body.descricao ?? politica.descricao,
-          ativa: request.body.ativa ?? politica.ativa,
-          payload: payloadFinal,
-          versao: novaVersao,
-        })
-        .where(eq(politicas.id, politica.id))
-        .returning();
-
-      await db.insert(politicasVersoes).values({
-        politicaId: politica.id,
-        versao: novaVersao,
-        payload: payloadFinal,
-        criadoPor: ator.id,
-      });
-
-      await registrarAuditoria(db, {
-        ator,
-        acao: 'POLITICA_ATUALIZADA',
-        entidade: 'politica',
-        entidadeId: politica.id,
-        detalhes: { versao: novaVersao },
-        ip: request.ip,
-        userAgent: request.headers['user-agent'],
-      });
-
-      return reply.send(atualizada);
     },
   );
 
@@ -357,43 +515,52 @@ export function registerPoliticaRoutes(app: FastifyInstance): void {
         request.headers['user-agent'],
       );
 
-      let payloadFinal: PolicyPayload;
+      const novaVersao = politica.versao + 1;
+      const versaoRestaurada = versaoAlvo.versao;
+      const ip = request.ip;
+      const userAgent = request.headers['user-agent'];
+
       try {
-        payloadFinal = await executarEscritaPoliticaSincrona({
-          nomePolitica: politica.amapiName,
-          payload: payloadCorrigido,
-        });
+        const payloadFinal = await executarEscritaPoliticaSincrona(
+          { nomePolitica: politica.amapiName, payload: payloadCorrigido },
+          {
+            aposTimeout: (resultado) => {
+              if (resultado.status === 'sucesso') {
+                void persistirRollbackAposSucesso(
+                  politica.id,
+                  novaVersao,
+                  resultado.payload,
+                  versaoRestaurada,
+                  ator,
+                  ip,
+                  userAgent,
+                );
+              } else {
+                logger.error(
+                  { err: resultado.erro, politicaId: politica.id },
+                  'falha ao aplicar rollback na AMAPI (reconciliação tardia pós-timeout)',
+                );
+              }
+            },
+          },
+        );
+        const atualizada = await persistirRollbackAposSucesso(
+          politica.id,
+          novaVersao,
+          payloadFinal,
+          versaoRestaurada,
+          ator,
+          ip,
+          userAgent,
+        );
+        return reply.send(atualizada);
       } catch (erro) {
+        if (erro instanceof EscritaPoliticaTimeoutError) {
+          return respostaDeTimeout(reply, politica.id, erro);
+        }
         logger.error({ err: erro, politicaId: politica.id }, 'falha ao aplicar rollback na AMAPI');
         return sendProblem(reply, 502, 'Falha ao salvar política na AMAPI', String(erro));
       }
-
-      const novaVersao = politica.versao + 1;
-      const [atualizada] = await db
-        .update(politicas)
-        .set({ payload: payloadFinal, versao: novaVersao })
-        .where(eq(politicas.id, politica.id))
-        .returning();
-
-      await db.insert(politicasVersoes).values({
-        politicaId: politica.id,
-        versao: novaVersao,
-        payload: payloadFinal,
-        diffResumo: `rollback pra versão ${versaoAlvo.versao}`,
-        criadoPor: ator.id,
-      });
-
-      await registrarAuditoria(db, {
-        ator,
-        acao: 'POLITICA_ROLLBACK',
-        entidade: 'politica',
-        entidadeId: politica.id,
-        detalhes: { versaoRestaurada: versaoAlvo.versao, novaVersao },
-        ip: request.ip,
-        userAgent: request.headers['user-agent'],
-      });
-
-      return reply.send(atualizada);
     },
   );
 

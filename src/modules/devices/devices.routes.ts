@@ -253,6 +253,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
             novaSenha: request.body.tipo === 'RESET_PASSWORD' ? request.body.novaSenha : undefined,
             pacotes: request.body.tipo === 'CLEAR_APP_DATA' ? request.body.pacotes : undefined,
           });
+          // Achado numa revisão: sem `nomeOperacao`, não há como o evento
+          // `COMMAND` do Pub/Sub correlacionar o resultado depois — marcar
+          // `ENVIADO` mesmo assim deixaria o comando travado nesse status
+          // pra sempre, sem erro visível pro técnico. Trata como falha de
+          // verdade (cai no `catch` abaixo, mesmo caminho de FALHA/502).
+          if (!emitido.nomeOperacao) {
+            throw new Error(
+              'AMAPI não retornou o nome da operação — não é possível acompanhar o resultado deste comando',
+            );
+          }
           // `ENVIADO`, não `SUCESSO` — o resultado final só chega depois,
           // via evento `COMMAND` do Pub/Sub (`src/domain/eventos/handlers/
           // command.ts`, Fase 5), correlacionado por `amapiOperationName`.
