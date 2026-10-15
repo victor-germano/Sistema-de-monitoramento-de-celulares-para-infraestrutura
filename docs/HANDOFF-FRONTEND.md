@@ -133,6 +133,12 @@ rotas, salvo alguma exceção documentada em `docs/api/`).
 chamada só, sem paginação. Ver `docs/api/dashboard.md` para o shape exato de cada
 contagem.
 
+Se a tela precisar de um botão "baixar planilha" (comum em dashboard de gerência),
+`GET /dashboard/export` retorna o mesmo dado em `.xlsx` — basta um link/`<a>` apontando
+pra essa URL com o `Authorization` header (ou abrir numa nova aba depois de obter um
+token de curta duração), o browser trata o `Content-Disposition` e baixa o arquivo
+sozinho.
+
 ### Lista de dispositivos com filtro
 
 `GET /devices` aceita todos os filtros como query string, combináveis:

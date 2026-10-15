@@ -174,6 +174,66 @@ describe('GET /dashboard', () => {
   });
 });
 
+describe('GET /dashboard/export', () => {
+  it('rejeita sem token', async () => {
+    const response = await app.inject({ method: 'GET', url: '/dashboard/export' });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('gera um .xlsx de verdade, com os mesmos números do /dashboard JSON', async () => {
+    const [resumoJson, exportResponse] = await Promise.all([
+      app
+        .inject({ method: 'GET', url: '/dashboard', headers: authHeader('ADMIN') })
+        .then((r) =>
+          r.json<{ dispositivos: { total: number }; alertasAbertos: { total: number } }>(),
+        ),
+      app.inject({
+        method: 'GET',
+        url: '/dashboard/export',
+        headers: authHeader('VIEWER'),
+      }),
+    ]);
+
+    expect(exportResponse.statusCode).toBe(200);
+    expect(exportResponse.headers['content-type']).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(exportResponse.headers['content-disposition']).toMatch(
+      /^attachment; filename="dashboard-mdm-\d{4}-\d{2}-\d{2}\.xlsx"$/,
+    );
+
+    // Round-trip de verdade: carrega o buffer retornado como um .xlsx real
+    // (não só confere os headers) e confirma que o número na planilha bate
+    // com o que o endpoint JSON retornou — pega regressão de serialização
+    // que um teste só de status code/headers não pegaria.
+    const ExcelJS = (await import('exceljs')).default;
+    const workbook = new ExcelJS.Workbook();
+    // `node_modules/exceljs/index.d.ts` declara globalmente
+    // `interface Buffer extends ArrayBuffer {}`, contaminando o tipo `Buffer`
+    // do projeto inteiro com um shape contraditório (bug conhecido da
+    // biblioteca, não um erro de lógica aqui) — nenhum cast resolve isso de
+    // forma limpa porque o próprio tipo global fica inconsistente.
+    // @ts-expect-error — ver comentário acima; o valor em runtime é um
+    // Buffer real, só a tipagem global do exceljs está quebrada.
+    await workbook.xlsx.load(exportResponse.rawPayload);
+
+    const nomesDasAbas = workbook.worksheets.map((aba) => aba.name);
+    expect(nomesDasAbas).toEqual([
+      'Resumo',
+      'Dispositivos por conformidade',
+      'Alertas por tipo',
+      'Alertas por severidade',
+      'Linhas por status',
+    ]);
+
+    const resumoAba = workbook.getWorksheet('Resumo');
+    const linhaTotalDispositivos = resumoAba
+      ?.getRows(2, resumoAba.rowCount - 1)
+      ?.find((linha) => linha.getCell(1).text === 'Dispositivos — total');
+    expect(linhaTotalDispositivos?.getCell(2).value).toBe(resumoJson.dispositivos.total);
+  });
+});
+
 describe('POST /internal/alertas/verificar', () => {
   it('só ADMIN pode chamar', async () => {
     const response = await app.inject({

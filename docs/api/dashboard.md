@@ -1,4 +1,4 @@
-# Dashboard (`GET /dashboard`)
+# Dashboard (`GET /dashboard`, `GET /dashboard/export`)
 
 > Fase 6. Resumo agregado da frota inteira — pensado pra alimentar a tela inicial do painel.
 > Contagens, nunca detalhe individual (isso é `/devices`, `/alertas`, etc.).
@@ -32,5 +32,15 @@ Só contagens agregadas — sem paginação, sem filtro. Pra listas filtráveis/
 qualquer uma dessas entidades, use as rotas específicas (`GET /devices`, `GET /alertas`,
 `GET /colaboradores`, `GET /linhas`).
 
-Exportação em arquivo (CSV/Excel) não está no escopo desta fase — a seção 12 não especifica
-um formato; se isso for pedido, é aditivo (um endpoint novo), não uma mudança deste aqui.
+## `GET /dashboard/export`
+
+**Papéis:** os mesmos de `GET /dashboard` (`VIEWER`, `TECNICO`, `ADMIN`, `AUDITOR`).
+
+Mesmo dado de `GET /dashboard`, em planilha `.xlsx` (`Content-Type:
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, com
+`Content-Disposition: attachment; filename="dashboard-mdm-AAAA-MM-DD.xlsx"`). Pensado pra
+quem quer levar o número pra uma reunião/planilha — não substitui o `GET /dashboard` JSON
+como fonte pra uma tela viva (sem paginação nem filtro, igual ao endpoint original).
+
+Abas geradas: `Resumo` (totais), `Dispositivos por conformidade`, `Alertas por tipo`,
+`Alertas por severidade`, `Linhas por status` — ver `src/domain/dashboard/exportar-excel.ts`.
