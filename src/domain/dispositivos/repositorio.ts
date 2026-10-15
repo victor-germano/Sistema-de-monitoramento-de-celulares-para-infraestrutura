@@ -1,4 +1,4 @@
-import { and, eq, gt, ilike, isNull, lt, or } from 'drizzle-orm';
+import { and, eq, gt, ilike, isNull, lt, notInArray, or } from 'drizzle-orm';
 import { db } from '../../db/client.ts';
 import { dispositivos, dispositivoApps } from '../../db/schema/dispositivos.ts';
 import { colaboradores } from '../../db/schema/colaboradores.ts';
@@ -12,7 +12,7 @@ export type NovoDispositivoApp = typeof dispositivoApps.$inferInsert;
 // os handlers do consumer Pub/Sub chamam essas funções DENTRO da transação
 // da mensagem (seção 8), pra que um erro no meio do processamento desfaça
 // tudo, inclusive o que já tinha sido gravado aqui.
-type Executor = Pick<typeof db, 'select' | 'insert' | 'update'>;
+type Executor = Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>;
 
 export async function buscarDispositivoPorAmapiName(
   executor: Executor,
@@ -80,18 +80,33 @@ export async function atualizarVinculoDispositivo(
 }
 
 /**
- * Upsert por `(dispositivoId, packageName)` — unique index já garante isso
- * no banco; aqui só decide INSERT vs UPDATE olhando o que já existe, porque
- * o alvo (Fase 4/6) é comparar o conjunto de apps ANTES e DEPOIS do
- * `STATUS_REPORT` pra detectar o alerta `APP_OBRIGATORIO_AUSENTE` (o app
- * que sumiu não aparece nem no insert nem no update — precisa comparar
- * contra a política, não contra o upsert em si).
+ * Sincroniza o inventário de apps do device: upsert por `(dispositivoId,
+ * packageName)` pros apps reportados, e APAGA qualquer linha antiga de um
+ * pacote que não está mais no relatório — achado numa revisão: antes só
+ * fazia upsert, nunca removia; um app desinstalado deixava uma linha
+ * "fantasma" pra sempre, e `APP_OBRIGATORIO_AUSENTE` (que lê esta tabela
+ * direto) nunca detectava a ausência de verdade.
+ *
+ * `apps` vazio é um relatório válido ("o device não tem nenhum app
+ * reportável agora", mesma convenção já usada no resto deste módulo pra
+ * `APP_OBRIGATORIO_AUSENTE") — `notInArray` com lista vazia já resolve pra
+ * `true` (apaga tudo do device), sem precisar de um `if` separado aqui.
  */
 export async function upsertDispositivoApps(
   executor: Executor,
   dispositivoId: string,
   apps: readonly Omit<NovoDispositivoApp, 'id' | 'dispositivoId'>[],
 ): Promise<void> {
+  await executor.delete(dispositivoApps).where(
+    and(
+      eq(dispositivoApps.dispositivoId, dispositivoId),
+      notInArray(
+        dispositivoApps.packageName,
+        apps.map((app) => app.packageName),
+      ),
+    ),
+  );
+
   for (const app of apps) {
     const [existente] = await executor
       .select({ id: dispositivoApps.id })
