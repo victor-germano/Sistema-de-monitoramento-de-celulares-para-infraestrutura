@@ -105,6 +105,24 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 
 ## Estado atual
 
+**Revisão completa do backend + rodada de eficiência (20 achados, 6 lotes): concluída e
+validada contra o GitHub real, "0 erros" confirmado.** Depois da revisão de 15 bugs
+(abaixo), o Victor perguntou especificamente sobre eficiência — resposta honesta: a
+revisão anterior tinha sido só de correção, e tinha 5 achados de eficiência/robustez
+deixados de lado de propósito (não eram bugs). Pedido explícito de resolver todos,
+"0 erros, nada deixado de lado". Lote 6 resolveu:
+
+**Lote 6 — Eficiência/robustez** — `GET /dashboard` com 10 queries sequenciais → paralelas
+(`Promise.all`); busca livre (`?busca=`) em 4 endpoints sem escapar `%`/`_` do ILIKE
+(helper compartilhado novo, `src/shared/sql-like.ts`); corrida real no token de
+enrollment (SELECT+checar+UPDATE não-atômico — corrigido com `UPDATE ... WHERE
+   usado_em IS NULL`, testado disparando a corrida de verdade via `Promise.allSettled`
+contra Postgres real); vazamento de 3 conexões Redis no shutdown do processo da API
+(nunca fechava a fila de política); 409 sistêmico pra qualquer violação de unicidade
+do Postgres (SQLSTATE 23505) no error handler global, fechando a janela de corrida
+check-then-insert residual pra matrícula/número/patrimônio de uma vez, não rota por
+rota. 321 testes (11 novos), CI e CodeQL verdes no commit `ffa31b0`.
+
 **Revisão completa do backend (15 bugs, 5 lotes): concluída e validada contra o GitHub
 real.** Pedido explícito do Victor antes de liberar o frontend ("a empresa tem mais de
 mil funcionários, precisa estar rodando liso") — revisão adversarial dedicada (não só
@@ -323,9 +341,11 @@ resolvidos ANTES de implementar, não depois (ADR-026/027/029/030).
 
 ## Próximo passo
 
-**Backend formalmente liberado pro frontend** (2026-10-15) — 310 testes, revisão
-adversarial completa (15 bugs reais corrigidos, não só "os testes passam"), CI e
-CodeQL verdes contra o GitHub real, não só localmente. Fase 7 concluída — era a última
+**Backend formalmente liberado pro frontend, "0 erros" confirmado** (2026-10-15) — 321
+testes, 20 achados reais corrigidos entre as duas revisões (15 de correção/segurança +
+5 de eficiência/robustez), não só "os testes passam". CI e CodeQL verdes contra o
+GitHub real, não só localmente — confirmado de novo depois de cada rodada. Fase 7
+concluída — era a última
 fase da spec original. Não há próxima fase definida pela spec. Dois caminhos possíveis
 a partir daqui:
 
