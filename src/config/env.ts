@@ -34,19 +34,28 @@ export const envSchema = z.object({
   // registrada em ADR-010).
   FRONTEND_URL: z.string().url(),
   // Domínios aceitos no login, separados por vírgula — pelo menos um.
+  // Achado numa revisão: `.min(1)` rodava na string CRUA, antes do split —
+  // um valor só com vírgula (ex. ",") tem length 1, passava a validação, e
+  // só depois virava `[]` (splitList filtra os dois lados vazios) — o app
+  // subia sem erro e nenhum login jamais passaria. `.pipe(...)` valida o
+  // array JÁ TRANSFORMADO, pegando esse caso.
   ALLOWED_EMAIL_DOMAINS: z
     .string()
-    .min(1, 'ALLOWED_EMAIL_DOMAINS precisa de pelo menos um domínio')
-    .transform((value) => splitList(value)),
+    .transform((value) => splitList(value))
+    .pipe(z.array(z.string()).min(1, 'ALLOWED_EMAIL_DOMAINS precisa de pelo menos um domínio')),
   // E-mails que recebem role ADMIN no primeiro login em vez de VIEWER —
   // resolve o problema do "primeiro ADMIN" (provisionamento JIT sempre cria
   // VIEWER; sem isso, ninguém nunca sairia de VIEWER). Opcional: lista vazia
   // é um valor válido (times que preferem promover manualmente via SQL no
-  // primeiro setup).
+  // primeiro setup). Normalizado pra minúsculas aqui — achado numa revisão:
+  // o e-mail do provedor OIDC já chega em minúsculas na comparação
+  // (`src/domain/usuarios/repositorio.ts`), mas um valor com maiúscula
+  // nesta variável (ex. copiado de uma assinatura de e-mail) nunca batia,
+  // travando o primeiro ADMIN como VIEWER silenciosamente (ADR-012).
   BOOTSTRAP_ADMIN_EMAILS: z
     .string()
     .default('')
-    .transform((value) => splitList(value)),
+    .transform((value) => splitList(value).map((email) => email.toLowerCase())),
 
   // JWT interno de sessão + refresh token opaco (seção 5). Segredo mínimo de
   // 32 chars — não é uma regra arbitrária, é o mínimo recomendado pra HMAC
