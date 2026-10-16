@@ -26,6 +26,17 @@ export default defineConfig({
     // ter bem mais folga — reavaliar paralelismo lá se o tempo de CI
     // incomodar, não replicar esta config às cegas.
     fileParallelism: false,
+    // Achado no CI real (não reproduz localmente sem `--coverage`, que muda
+    // o timing): bug conhecido e ainda aberto do próprio Vitest 4/5
+    // (vitest-dev/vitest#11153) — o worker intercepta console.log via RPC
+    // pro processo principal, e um log tardio bem na hora do teardown do
+    // worker vira `EnvironmentTeardownError` não tratado, mesmo com todos os
+    // testes passando (328/328, nenhum teste falhou de verdade). Intermitente
+    // e sem causa raiz confirmada pelos mantenedores do Vitest ainda.
+    // Desligar a interceptação manda o console direto pro stdout — perde o
+    // prefixo "de qual arquivo veio" nos logs de teste, mas elimina a
+    // corrida (mesmo workaround usado por outros projetos que bateram nisso).
+    disableConsoleIntercept: true,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],

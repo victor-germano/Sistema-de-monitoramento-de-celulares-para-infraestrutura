@@ -1317,3 +1317,57 @@ oficial (propriedades obrigatórias, enums de `type`/`plan`, shape de cada varia
    conferir o preview antes de aplicar. Nenhuma validação estática substitui isso.
 2. Pendências já listadas nas entradas anteriores inalteradas (enterprise AMAPI,
    Pub/Sub, filiais, domínio via Registro.br, segredos de produção).
+
+---
+
+### 2026-10-16 — CI real pegou falha que não reproduz em qualquer máquina
+
+**Solicitação original:** depois de corrigir o `render.yaml`, Victor pediu pra "verificar
+o progresso" e conferir se tinha algo pra mexer no painel.
+
+**Status:** Concluída.
+
+**Achado real no CI do GitHub** (não localmente — só apareceu sob `npm run
+test:coverage`, que o CI usa e que eu não tinha rodado local antes de empurrar o fix do
+`render.yaml`): todos os 328 testes passaram, mas o processo saiu com código 1 por causa
+de um **bug conhecido e ainda aberto do próprio Vitest 4/5**
+([vitest-dev/vitest#11153](https://github.com/vitest-dev/vitest/issues/11153)) —
+intermitente, sem causa raiz fechada pelos mantenedores. O worker intercepta
+`console.log` via RPC pro processo principal; um log tardio bem na hora do teardown do
+worker vira `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
+pending`, contado como erro não tratado mesmo sem nenhum teste falhar de verdade.
+
+**Correção aplicada:** `disableConsoleIntercept: true` em `vitest.config.ts` — mesmo
+workaround documentado por outros projetos que bateram nisso (manda o console direto
+pro stdout, sem passar pela RPC do worker; só custo real é perder o prefixo "de qual
+arquivo veio" nos logs de teste, aceitável aqui).
+
+**Tentativa de validação local que NÃO reproduziu nem confirmou nada** (achado
+ambiental, não é sobre o fix em si): rodar `test:coverage` de novo localmente deu uma
+falha totalmente diferente — `Error: Expected Reaper to map exposed port 8080` em 13
+arquivos, efeito cascata num `TypeError: fecharFilaEscritaPolitica is not a function`.
+Causa: a máquina de dev tem **11 containers Docker de outros projetos** do Victor
+rodando ao mesmo tempo (Tech N, ASN Supply, verificador antigo), incluindo um ocupando
+a porta 8080 que colide com o Reaper (Ryuk) do Testcontainers — contenção de recurso no
+Docker Desktop local, não um bug de código. Como o GitHub Actions roda em runner limpo
+(sem essa interferência), o CI real foi tratado como fonte da verdade em vez de insistir
+numa reprodução local — decisão deliberada, não preguiça de investigar mais.
+
+**Revisão do painel (frontend) nesta mesma rodada:** navegado por todas as 7 telas +
+fluxos ainda não testados nesta sessão (detalhe de dispositivo, colaborador, linha,
+emitir comando, nova política) — zero erro de console. Achado e corrigido 1 bug real:
+`Estado (AMAPI)` na ficha técnica do dispositivo aparecia em branco em vez de "—"
+quando o device nunca sincronizou de verdade com a AMAPI (`dispositivo.estado` vem como
+string vazia, não `null`, pra esses casos — o único campo da ficha sem o fallback que
+todo campo irmão já tinha). Commitado e pushado no repositório do painel.
+
+**Arquivos alterados:** `vitest.config.ts` (este backend), este arquivo;
+`src/app/devices/[id]/page.tsx` no repositório do painel (separado).
+
+**Pendências futuras:**
+
+1. Confirmar no CI real (próximo push) que `disableConsoleIntercept` elimina o
+   `EnvironmentTeardownError` — é um workaround documentado por terceiros, não uma
+   correção oficial do Vitest; se reaparecer, é hora de abrir uma issue própria ou
+   fixar numa versão de patch mais nova.
+2. Pendências já listadas nas entradas anteriores inalteradas.
