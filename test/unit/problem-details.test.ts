@@ -33,6 +33,15 @@ describe('errorHandler — violação de unicidade do Postgres', () => {
     expect(response.statusCode).not.toBe(409);
   });
 
+  it('erro embrulhado com .cause.code 23505 (DrizzleQueryError, drizzle-orm 0.44+) também vira 409', async () => {
+    const causa = Object.assign(new Error('duplicate key value'), { code: '23505' });
+    const envelope = Object.assign(new Error('Failed query: ...'), { cause: causa });
+    const app = appComErro(envelope);
+    const response = await app.inject({ method: 'GET', url: '/explode' });
+    expect(response.statusCode).toBe(409);
+    expect(response.json<{ title: string }>().title).toBe('Registro duplicado');
+  });
+
   it('erro sem propriedade code (um Error comum) continua caindo no caminho genérico (500)', async () => {
     const app = appComErro(new Error('algo quebrou'));
     const response = await app.inject({ method: 'GET', url: '/explode' });

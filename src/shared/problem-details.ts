@@ -37,8 +37,24 @@ export function sendProblem(
 // pelo driver `postgres` (não um status HTTP nosso). Checagem estrutural
 // (não `instanceof`) porque o tipo exato da classe de erro do driver não é
 // exportado como algo que faça sentido importar aqui.
+//
+// Achado no upgrade do drizzle-orm (0.38 → 0.45, corrige GHSA-gpj5-g38j-94v9
+// — SQL injection via identificador mal escapado): a partir da 0.44, todo
+// erro de driver vem embrulhado num `DrizzleQueryError`, e o `PostgresError`
+// original (com o `.code`) passa a viver em `.cause`, não mais direto no
+// erro — confirmado empiricamente contra o Postgres real antes de aplicar
+// este fix, não só pelo changelog. Olha os dois níveis (o erro em si e
+// `.cause`) pra funcionar nos dois formatos, sem presumir qual versão do
+// driver está rodando.
+function codigoPostgres(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  if ('code' in error && typeof error.code === 'string') return error.code;
+  if ('cause' in error && error.cause) return codigoPostgres(error.cause);
+  return undefined;
+}
+
 function ehViolacaoDeUnicidade(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === '23505';
+  return codigoPostgres(error) === '23505';
 }
 
 export function errorHandler(

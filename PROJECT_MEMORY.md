@@ -1102,3 +1102,73 @@ de **produto em produção**: as 3 pendências de negócio (enterprise AMAPI, Pu
 filiais) continuam bloqueando o primeiro teste E2E real contra um device físico — mas
 nenhuma delas bloqueia começar o frontend, que consome a API já estável e documentada
 (`docs/openapi.json`/`HANDOFF-FRONTEND.md`).
+
+---
+
+### 2026-10-15 — Upgrade do drizzle-orm (fecha a pendência de SQL injection)
+
+**Solicitação original:** Victor pediu pra resolver a pendência deliberada do
+`drizzle-orm` (vulnerabilidade real de SQL injection, documentada desde a Fase 7),
+depois de uma sessão inteira completando as telas do frontend (comandos, políticas,
+colaboradores/linhas, alertas, gestão de usuários).
+
+**Status:** Concluída.
+
+`drizzle-orm` `0.38.4` → `0.45.4` — corrige
+[GHSA-gpj5-g38j-94v9](https://github.com/advisories/GHSA-gpj5-g38j-94v9) ("SQL
+injection via identificador mal escapado", fixado na 0.45.2). `npm audit` confirma:
+zero vulnerabilidades restantes pra `drizzle-orm`.
+
+**Achado real durante o upgrade (não só por changelog — confirmado empiricamente
+contra o Postgres de verdade antes E depois):** a partir da 0.44.0, todo erro vindo do
+driver passa a vir embrulhado num `DrizzleQueryError` — o `PostgresError` original
+(com o `.code` SQLSTATE que `errorHandler` usa pra decidir o 409 de "registro
+duplicado") passa a viver em `.cause`, não mais direto no erro. Sem ajustar, a defesa
+sistêmica contra violação de unicidade (`ehViolacaoDeUnicidade` em
+`src/shared/problem-details.ts`) pararia de funcionar silenciosamente — toda
+duplicata que escapasse do check prévio da rota cairia num 500 genérico em vez do 409
+esperado, sem nenhum teste existente pra pegar isso (os testes de 409 das rotas
+testam o check prévio explícito, não o catch-all do `errorHandler`).
+
+Processo usado pra achar isso com confiança, não só confiar no changelog:
+
+1. Script descartável inserindo a mesma matrícula duas vezes contra o Postgres real
+   (`scripts/_check-erro-unicidade.ts`, nunca commitado) — rodado ANTES do upgrade
+   pra confirmar a forma atual do erro (`PostgresError` direto, `.code` acessível).
+2. `npm install drizzle-orm@0.45.4`.
+3. Mesmo script de novo — confirmou a forma nova (`DrizzleQueryError`, `.code` só via
+   `.cause.code`).
+4. Corrigido `codigoPostgres()` em `problem-details.ts` pra olhar os dois níveis
+   (funciona com ou sem o wrapper, não presume qual versão do driver está rodando).
+5. Teste de regressão novo em `test/unit/problem-details.test.ts` cobrindo o formato
+   embrulhado.
+
+Nenhuma outra mudança de breaking change das versões 0.39–0.44 nos afeta: sem colunas
+`array` (afetadas pela 0.41), sem uso de `.free()`/`.prepare(` manual, sem rotas MySQL
+(a remoção de `.fullJoin()` da 0.43 é só MySQL). `db.query.politicas.findFirst` (RQB
+v1, usado em 2 lugares) continua funcionando — a remoção do RQB v1 só acontece na
+1.0.0-rc.1, bem além do alvo desta atualização.
+
+**Status final confirmado:** typecheck limpo, lint limpo, suíte completa
+**328/328** (327 + o teste novo), `docs/openapi.json` sem drift (nenhuma rota/schema
+mudou, só o `errorHandler` interno).
+
+**Decisão deliberada:** só o `drizzle-orm` foi atualizado nesta entrada.
+`drizzle-kit` (dev-only, fix disponível na 0.31.11) e as 3 vulnerabilidades
+`critical` do `vitest`/`tinypool`/`@vitest/coverage-v8` (reportadas pelo mesmo
+`npm audit`, mas pré-existentes e sem relação com o `drizzle-orm`) ficam de fora do
+escopo desta sessão — nenhuma delas é a pendência que o Victor pediu pra resolver.
+
+**Arquivos alterados:** `package.json`/`package-lock.json` (upgrade),
+`src/shared/problem-details.ts` (fix do `.cause`), `test/unit/problem-details.test.ts`
+(teste de regressão), este arquivo.
+
+**Pendências futuras:**
+
+1. `drizzle-kit` ainda em `0.30.6` (fix disponível, `0.31.11`, major) — avaliar
+   separadamente, é dependência de dev (migrations/studio), não roda em produção.
+2. Vulnerabilidades `critical` em `vitest`/`tinypool`/`@vitest/coverage-v8` —
+   pré-existentes, não introduzidas por este upgrade, fora do escopo desta entrada.
+3. Pendências já listadas nas entradas anteriores inalteradas (validação do
+   `render.yaml` contra conta real, enterprise AMAPI/Pub/Sub/filiais, 7 PRs do
+   Dependabot, decisão sobre Code Scanning nativo).
