@@ -1,6 +1,7 @@
 import { and, eq, gt, ilike, or } from 'drizzle-orm';
 import { db } from '../../db/client.ts';
 import { linhas } from '../../db/schema/linhas.ts';
+import { escaparTermoBusca } from '../../shared/sql-like.ts';
 
 export type Linha = typeof linhas.$inferSelect;
 export type NovaLinha = typeof linhas.$inferInsert;
@@ -50,7 +51,7 @@ export async function listarLinhas(filtros: FiltrosListarLinhas): Promise<Pagina
   if (filtros.status) condicoes.push(eq(linhas.status, filtros.status));
   if (filtros.operadora) condicoes.push(eq(linhas.operadora, filtros.operadora));
   if (filtros.busca) {
-    const termo = `%${filtros.busca}%`;
+    const termo = `%${escaparTermoBusca(filtros.busca)}%`;
     condicoes.push(or(ilike(linhas.numero, termo), ilike(linhas.iccid, termo)));
   }
   if (filtros.cursor) condicoes.push(gt(linhas.id, filtros.cursor));

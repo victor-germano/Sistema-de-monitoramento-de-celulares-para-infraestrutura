@@ -57,13 +57,28 @@ function comValorMensalComoString<T extends { valorMensal?: number }>(
   return { ...resto, valorMensal: valorMensal !== undefined ? valorMensal.toString() : undefined };
 }
 
+// Contraparte de `comValorMensalComoString`, pra SAÍDA: sem isso, toda
+// resposta de `/linhas` devolvia `valorMensal` como a string crua do driver
+// Postgres (ex. "89.90") em vez do número que docs/api/colaboradores-e-
+// linhas.md promete — achado numa revisão de segurança/correção (o teste de
+// integração antigo até travava o bug como esperado, `.toBe('89.90')`).
+function comValorMensalComoNumero<T extends { valorMensal: string | null }>(
+  linha: T,
+): Omit<T, 'valorMensal'> & { valorMensal: number | null } {
+  const { valorMensal, ...resto } = linha;
+  return { ...resto, valorMensal: valorMensal === null ? null : Number(valorMensal) };
+}
+
 export function registerLinhaRoutes(app: FastifyInstance): void {
   const zodApp = app.withTypeProvider<ZodTypeProvider>();
 
   zodApp.get(
     '/linhas',
     { ...withRole(...ROLES_LEITURA), schema: { querystring: listarQuerySchema } },
-    async (request, reply) => reply.send(await listarLinhas(request.query)),
+    async (request, reply) => {
+      const pagina = await listarLinhas(request.query);
+      return reply.send({ ...pagina, itens: pagina.itens.map(comValorMensalComoNumero) });
+    },
   );
 
   zodApp.get(
@@ -72,7 +87,7 @@ export function registerLinhaRoutes(app: FastifyInstance): void {
     async (request, reply) => {
       const linha = await buscarLinhaPorId(request.params.id);
       if (!linha) return sendProblem(reply, 404, 'Linha não encontrada', undefined);
-      return reply.send(linha);
+      return reply.send(comValorMensalComoNumero(linha));
     },
   );
 
@@ -93,7 +108,7 @@ export function registerLinhaRoutes(app: FastifyInstance): void {
         ip: request.ip,
         userAgent: request.headers['user-agent'],
       });
-      return reply.status(201).send(linha);
+      return reply.status(201).send(comValorMensalComoNumero(linha));
     },
   );
 
@@ -116,7 +131,7 @@ export function registerLinhaRoutes(app: FastifyInstance): void {
         ip: request.ip,
         userAgent: request.headers['user-agent'],
       });
-      return reply.send(linha);
+      return reply.send(comValorMensalComoNumero(linha));
     },
   );
 }

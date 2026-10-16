@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNotNull, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt } from 'drizzle-orm';
 import { db } from '../../db/client.ts';
 import { alertas } from '../../db/schema/alertas.ts';
 
@@ -104,7 +104,13 @@ export async function listarAlertas(filtros: FiltrosListarAlertas): Promise<Pagi
   if (filtros.severidade) condicoes.push(eq(alertas.severidade, filtros.severidade));
   if (filtros.aberto === true) condicoes.push(isNull(alertas.resolvidoEm));
   if (filtros.aberto === false) condicoes.push(isNotNull(alertas.resolvidoEm));
-  if (filtros.cursor) condicoes.push(gt(alertas.id, filtros.cursor));
+  // Achado numa revisão: a lista é `desc(criadoEm)` (mais recente primeiro),
+  // mas o cursor comparava `gt` (ids MAIORES — os mesmos alertas recentes de
+  // novo) em vez de `lt` (ids MENORES — os próximos, mais antigos). `id`
+  // (UUID v7) é ordenável por tempo de criação, na mesma direção de
+  // `criadoEm` — por isso dá pra paginar por ele, igual a listarDispositivos
+  // faz (lá a ordenação é ascendente, por isso `gt` é o lado certo ali).
+  if (filtros.cursor) condicoes.push(lt(alertas.id, filtros.cursor));
 
   const linhas = await db
     .select()

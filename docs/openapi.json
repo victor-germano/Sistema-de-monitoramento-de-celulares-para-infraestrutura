@@ -651,7 +651,11 @@
           },
           {
             "schema": {
-              "type": "boolean"
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
             },
             "in": "query",
             "name": "ativa",
@@ -861,7 +865,11 @@
           },
           {
             "schema": {
-              "type": "boolean"
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
             },
             "in": "query",
             "name": "ativo",
@@ -1253,7 +1261,11 @@
           },
           {
             "schema": {
-              "type": "boolean"
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
             },
             "in": "query",
             "name": "aberto",
@@ -1348,6 +1360,15 @@
       }
     },
     "/dashboard": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/dashboard/export": {
       "get": {
         "responses": {
           "200": {

@@ -8,6 +8,16 @@ import { obterResumoDashboard } from '../../domain/dashboard/repositorio.ts';
 import { gerarPlanilhaDashboard } from '../../domain/dashboard/exportar-excel.ts';
 import { withRole } from '../../plugins/rbac.ts';
 
+// Achado numa revisão: `new Date().toISOString()` é sempre UTC — entre
+// 21h00 e 23h59 no horário do Grupo Roveri (America/Sao_Paulo, UTC-3), já é
+// o dia seguinte em UTC, e o arquivo baixado vinha com a data de amanhã no
+// nome. `toLocaleDateString('en-CA', { timeZone: ... })` devolve
+// diretamente no formato AAAA-MM-DD (convenção da locale `en-CA`), já no
+// fuso certo, sem precisar de biblioteca de data nova.
+export function dataDeHojeNoFusoDaEmpresa(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+}
+
 export function registerDashboardRoutes(app: FastifyInstance): void {
   const zodApp = app.withTypeProvider<ZodTypeProvider>();
 
@@ -30,10 +40,10 @@ export function registerDashboardRoutes(app: FastifyInstance): void {
     async (_request, reply) => {
       const resumo = await obterResumoDashboard();
       const planilha = await gerarPlanilhaDashboard(resumo);
-      const dataIso = new Date().toISOString().slice(0, 10);
+      const data = dataDeHojeNoFusoDaEmpresa();
 
       return reply
-        .header('Content-Disposition', `attachment; filename="dashboard-mdm-${dataIso}.xlsx"`)
+        .header('Content-Disposition', `attachment; filename="dashboard-mdm-${data}.xlsx"`)
         .type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         .send(planilha);
     },
