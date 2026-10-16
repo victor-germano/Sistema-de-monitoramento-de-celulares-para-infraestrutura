@@ -4,13 +4,17 @@
 # (só api e worker-pubsub podem escalar; os outros dois quebram garantias de
 # correção se rodarem em mais de 1 instância — ver comentário em cada um).
 #
-# IMPORTANTE antes do primeiro deploy: valide este arquivo no dashboard do
-# Render (New → Blueprint, apontando pra este repositório) ANTES de aplicar —
-# a sintaxe exata de alguns campos (principalmente o serviço `redis` como
-# managed database) pode ter mudado desde que este arquivo foi escrito
-# (2026-10); o Render avisa no próprio preview se algo não bater com a
-# versão atual da API deles. Nenhum destes serviços foi implantado contra
-# uma conta Render real ainda.
+# Validado em 2026-10-16 contra o JSON Schema oficial do Render
+# (render.com/schema/render.yaml.json) — sem conta Render real disponível
+# neste ambiente pra validar no dashboard de verdade (New → Blueprint), então
+# isso é validação estática de sintaxe, não um deploy de fato testado. Achado
+# e corrigido: `envVarGroups` NÃO é uma propriedade de serviço no schema
+# atual (serverService tem additionalProperties:false) — a forma correta de
+# aplicar um grupo é `- fromGroup: <nome>` dentro do `envVars` de cada
+# serviço, como está abaixo. `type: redis` continua aceito (alias
+# depreciado), mas usamos `keyvalue` por ser a forma atual. `plan: starter`
+# é válido nos três tipos de serviço usados aqui. Ainda assim, confirme no
+# preview do dashboard antes de aplicar — esta validação não substitui isso.
 #
 # O domínio da empresa (ex.: api.gruporoveri.com.br) é configurado depois,
 # no dashboard do serviço `mdm-api` (Settings → Custom Domain) — aponta um
@@ -25,7 +29,7 @@ databases:
     plan: starter
 
 services:
-  - type: redis
+  - type: keyvalue
     name: mdm-redis
     plan: starter
     ipAllowList: [] # só os serviços deste blueprint acessam, não a internet
@@ -36,13 +40,12 @@ services:
     dockerfilePath: ./Dockerfile
     plan: starter
     healthCheckPath: /health
-    envVarGroups:
-      - mdm-shared
     envVars:
+      - fromGroup: mdm-shared
       - key: DATABASE_URL
         fromDatabase: { name: mdm-postgres, property: connectionString }
       - key: REDIS_URL
-        fromService: { name: mdm-redis, type: redis, property: connectionString }
+        fromService: { name: mdm-redis, type: keyvalue, property: connectionString }
 
   - type: worker
     name: mdm-worker-pubsub
@@ -50,13 +53,12 @@ services:
     dockerfilePath: ./Dockerfile
     dockerCommand: node dist/workers/pubsub-consumer.js
     plan: starter
-    envVarGroups:
-      - mdm-shared
     envVars:
+      - fromGroup: mdm-shared
       - key: DATABASE_URL
         fromDatabase: { name: mdm-postgres, property: connectionString }
       - key: REDIS_URL
-        fromService: { name: mdm-redis, type: redis, property: connectionString }
+        fromService: { name: mdm-redis, type: keyvalue, property: connectionString }
     # Pode ter mais de 1 instância com segurança (redundância/throughput) —
     # é o único worker pra que isso vale, ver docs/ARQUITETURA.md.
 
@@ -66,13 +68,12 @@ services:
     dockerfilePath: ./Dockerfile
     dockerCommand: node dist/workers/policy-write-worker.js
     plan: starter
-    envVarGroups:
-      - mdm-shared
     envVars:
+      - fromGroup: mdm-shared
       - key: DATABASE_URL
         fromDatabase: { name: mdm-postgres, property: connectionString }
       - key: REDIS_URL
-        fromService: { name: mdm-redis, type: redis, property: connectionString }
+        fromService: { name: mdm-redis, type: keyvalue, property: connectionString }
     # NUNCA definir mais de 1 instância/réplica deste serviço no dashboard —
     # `concurrency: 1` só serializa escrita de política DENTRO de um
     # processo; 2 instâncias quebram a garantia contra o rate limit da AMAPI
@@ -84,13 +85,12 @@ services:
     dockerfilePath: ./Dockerfile
     dockerCommand: node dist/workers/manutencao-worker.js
     plan: starter
-    envVarGroups:
-      - mdm-shared
     envVars:
+      - fromGroup: mdm-shared
       - key: DATABASE_URL
         fromDatabase: { name: mdm-postgres, property: connectionString }
       - key: REDIS_URL
-        fromService: { name: mdm-redis, type: redis, property: connectionString }
+        fromService: { name: mdm-redis, type: keyvalue, property: connectionString }
     # Mesma restrição do worker acima: exatamente 1 instância (senão dobra
     # scan periódico e purga LGPD à toa).
 

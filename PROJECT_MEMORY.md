@@ -1268,3 +1268,52 @@ high), todas em dependências de **dev/teste** (`testcontainers`, `dockerode`,
    nenhuma bloqueia produção.
 4. Pendências de negócio inalteradas (enterprise AMAPI, Pub/Sub, filiais) — continuam
    sendo o único bloqueio real pro primeiro teste E2E contra um device físico.
+
+---
+
+### 2026-10-16 — Validação do `render.yaml` contra o schema oficial do Render
+
+**Solicitação original:** Victor pediu pra validar o `render.yaml` "contra uma Render de
+verdade". Sem conta Render configurada neste ambiente (sem CLI, sem `RENDER_API_KEY`) —
+validação feita contra o JSON Schema público do Render
+(`render.com/schema/render.yaml.json`) e a documentação oficial, não contra um deploy
+real. Deixado explícito pro Victor que o passo final (New → Blueprint no dashboard)
+continua pendente dele.
+
+**Status:** Concluída (validação estática); deploy real continua pendência.
+
+**Achado real (bloquearia o Blueprint no dashboard):** `envVarGroups: [mdm-shared]` no
+nível de cada serviço **não é uma propriedade válida** — o schema atual
+(`serverService`) tem `additionalProperties:false` e não lista `envVarGroups` entre as
+propriedades aceitas. A forma correta de aplicar um grupo de env vars a um serviço é
+uma entrada `- fromGroup: <nome>` dentro do próprio array `envVars` do serviço (schema
+`envVarFromGroup`, única propriedade `fromGroup`). Corrigido nos 4 serviços (api +
+3 workers).
+
+**Achado secundário (não bloqueante, mas desatualizado):** `type: redis` ainda é aceito
+como alias depreciado, mas o nome atual no schema é `type: keyvalue` — atualizado nos
+4 lugares que referenciam o serviço `mdm-redis` (a própria declaração do serviço +
+`fromService.type` nos 4 consumidores).
+
+**Confirmado como correto, sem mudança:** `plan: starter` é válido nos três tipos de
+serviço usados aqui (web, worker, Postgres, Key Value) — o schema lista `starter`
+explicitamente em `serverPlan`/`postgresPlan`/`keyValuePlan`. `ipAllowList` no serviço
+Key Value está presente e correto (campo obrigatório ali). Binding dinâmico de porta
+(`env.PORT`, sem default hardcoded no Dockerfile além do `HEALTHCHECK` local de
+`docker compose`) já segue o padrão que o Render recomenda — não depende de nenhuma
+porta fixa pro healthcheck da plataforma.
+
+**Validação feita:** `yaml.safe_load` confirma sintaxe válida; estrutura de cada bloco
+(`databases`, `services`, `envVarGroups`) comparada campo a campo contra o schema
+oficial (propriedades obrigatórias, enums de `type`/`plan`, shape de cada variante de
+`envVar`). `prettier --check` limpo.
+
+**Arquivos alterados:** `render.yaml` (os dois achados acima), este arquivo.
+
+**Pendências futuras:**
+
+1. **Validação real continua pendente** — o próximo passo é literalmente abrir o
+   dashboard do Render, "New → Blueprint", apontar pro repositório (agora público) e
+   conferir o preview antes de aplicar. Nenhuma validação estática substitui isso.
+2. Pendências já listadas nas entradas anteriores inalteradas (enterprise AMAPI,
+   Pub/Sub, filiais, domínio via Registro.br, segredos de produção).
