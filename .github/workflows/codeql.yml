@@ -32,22 +32,10 @@ jobs:
           languages: ${{ matrix.language }}
           queries: security-extended
 
-      # `upload: false` + artefato em vez de upload direto pro GitHub: a
-      # integração nativa (aba Security → Code scanning) exige essa feature
-      # habilitada nas configurações do repositório — em repositório PRIVADO
-      # isso pode depender de plano pago (GitHub Advanced Security), decisão
-      # de conta que não é nossa pra tomar sozinha. Enquanto isso não for
-      # decidido/habilitado manualmente (Settings → Code security and
-      # analysis), o resultado fica disponível como artefato do workflow, não
-      # perdido — ver docs/OPERACAO.md.
+      # Repositório tornou-se público em 2026-10-16 — "Code scanning" nativo
+      # (aba Security) é gratuito em repositório público, diferente de antes
+      # (privado, poderia exigir GitHub Advanced Security pago). Upload
+      # direto reativado; sem mais artefato redundante.
       - uses: github/codeql-action/analyze@v4
         with:
           category: '/language:${{ matrix.language }}'
-          upload: false
-          output: sarif-results
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: codeql-sarif-${{ matrix.language }}
-          path: sarif-results
-          retention-days: 30
