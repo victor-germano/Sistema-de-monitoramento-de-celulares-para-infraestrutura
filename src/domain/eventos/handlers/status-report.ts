@@ -89,9 +89,11 @@ export async function processarStatusReport(tx: Tx, device: Device): Promise<voi
   const appsReportados = mapearAppsDoDispositivo(device.applicationReports ?? [], coletadoEm);
   await upsertDispositivoApps(tx, dispositivo.id, appsReportados);
 
-  if (dispositivo.politicaId) {
-    await verificarAppsObrigatorios(tx, dispositivo.id, dispositivo.politicaId);
-  }
+  // Sempre chamado, mesmo sem política vinculada (`politicaId: null`) — ver
+  // comentário dentro da função: precisa resolver um alerta aberto quando o
+  // device foi desvinculado, não só quando ele continua vinculado mas sem
+  // apps obrigatórios.
+  await verificarAppsObrigatorios(tx, dispositivo.id, dispositivo.politicaId);
 
   await verificarAlertasReativos(tx, dispositivo);
 
@@ -101,16 +103,36 @@ export async function processarStatusReport(tx: Tx, device: Device): Promise<voi
   );
 }
 
+/**
+ * Achado numa revisão: as duas saídas antecipadas abaixo (`!politica` e
+ * `obrigatorios.length === 0`) retornavam sem nunca chegar no
+ * `resolverAlertaSeAberto` — diferente de todo outro alerta reativo, este
+ * não tinha caminho de resolução simétrico. Um device desvinculado da
+ * política (`politicaId: null`, pego pelo chamador) ou cuja política parou
+ * de exigir qualquer app `FORCE_INSTALLED` ficava com `APP_OBRIGATORIO_
+ * AUSENTE` aberto pra sempre, mesmo sem motivo nenhum pra isso.
+ */
 async function verificarAppsObrigatorios(
   tx: Tx,
   dispositivoId: string,
-  politicaId: string,
+  politicaId: string | null,
 ): Promise<void> {
+  if (!politicaId) {
+    await resolverAlertaSeAberto(tx, dispositivoId, 'APP_OBRIGATORIO_AUSENTE');
+    return;
+  }
+
   const [politica] = await tx.select().from(politicas).where(eq(politicas.id, politicaId)).limit(1);
-  if (!politica) return;
+  if (!politica) {
+    await resolverAlertaSeAberto(tx, dispositivoId, 'APP_OBRIGATORIO_AUSENTE');
+    return;
+  }
 
   const obrigatorios = extrairPackagesObrigatorios(politica.payload);
-  if (obrigatorios.length === 0) return;
+  if (obrigatorios.length === 0) {
+    await resolverAlertaSeAberto(tx, dispositivoId, 'APP_OBRIGATORIO_AUSENTE');
+    return;
+  }
 
   const instalados = new Set(
     (await listarAppsDoDispositivo(tx, dispositivoId)).map((app) => app.packageName),

@@ -12,6 +12,8 @@ const {
   pubsubSubscriptionMock,
   insertChain,
   dbInsertMock,
+  selectChain,
+  dbSelectMock,
   processarEventoBrutoMock,
 } = vi.hoisted(() => {
   const subscriptionFakeRef: { atual?: EventEmitter & { close: ReturnType<typeof vi.fn> } } = {};
@@ -27,12 +29,23 @@ const {
     returning: vi.fn(),
   };
   const dbInsertMock = vi.fn().mockReturnValue(insertChain);
+  // Usado só no caminho de redelivery (achado numa revisão): precisa saber
+  // se a linha já existente foi processada com sucesso antes de decidir
+  // ack sem reprocessar vs. tentar de novo.
+  const selectChain = {
+    from: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    limit: vi.fn(),
+  };
+  const dbSelectMock = vi.fn().mockReturnValue(selectChain);
   const processarEventoBrutoMock = vi.fn();
   return {
     subscriptionFakeRef,
     pubsubSubscriptionMock,
     insertChain,
     dbInsertMock,
+    selectChain,
+    dbSelectMock,
     processarEventoBrutoMock,
   };
 });
@@ -40,7 +53,7 @@ const {
 vi.mock('@google-cloud/pubsub', () => ({
   PubSub: vi.fn().mockImplementation(() => ({ subscription: pubsubSubscriptionMock })),
 }));
-vi.mock('../../src/db/client.ts', () => ({ db: { insert: dbInsertMock } }));
+vi.mock('../../src/db/client.ts', () => ({ db: { insert: dbInsertMock, select: dbSelectMock } }));
 vi.mock('../../src/domain/eventos/processar-evento.ts', () => ({
   processarEventoBruto: processarEventoBrutoMock,
 }));
@@ -74,6 +87,7 @@ function flushPromises(): Promise<void> {
 beforeEach(() => {
   vi.clearAllMocks();
   insertChain.returning.mockReset();
+  selectChain.limit.mockReset();
 });
 
 describe('pubsub-consumer', () => {
@@ -142,16 +156,66 @@ describe('pubsub-consumer', () => {
     expect(mensagem.ack).not.toHaveBeenCalled();
   });
 
-  it('redelivery (messageId já existe — onConflictDoNothing não retorna linha) -> ack sem reprocessar', async () => {
-    iniciarConsumerPubSub();
-    insertChain.returning.mockResolvedValueOnce([]);
-    const mensagem = criarMensagem({ notificationType: 'ENROLLMENT', dataObjeto: {} });
+  describe('redelivery (messageId já existe — onConflictDoNothing não retorna linha)', () => {
+    it('linha existente já processada com sucesso -> ack sem reprocessar', async () => {
+      iniciarConsumerPubSub();
+      insertChain.returning.mockResolvedValueOnce([]);
+      selectChain.limit.mockResolvedValueOnce([{ id: 10, processadoEm: new Date() }]);
+      const mensagem = criarMensagem({ notificationType: 'ENROLLMENT', dataObjeto: {} });
 
-    subscriptionFakeRef.atual!.emit('message', mensagem);
-    await flushPromises();
+      subscriptionFakeRef.atual!.emit('message', mensagem);
+      await flushPromises();
 
-    expect(processarEventoBrutoMock).not.toHaveBeenCalled();
-    expect(mensagem.ack).toHaveBeenCalledOnce();
+      expect(processarEventoBrutoMock).not.toHaveBeenCalled();
+      expect(mensagem.ack).toHaveBeenCalledOnce();
+    });
+
+    // Achado numa revisão: antes, QUALQUER redelivery acabava em ack
+    // incondicional — mesmo uma que tinha falhado por erro transitório
+    // (processado_em ainda null) nunca tinha uma segunda chance automática,
+    // só via POST /internal/pubsub/replay manual. Os dois testes abaixo
+    // provam que agora reprocessa de verdade.
+    it('linha existente NUNCA processada (falhou antes) + reprocessamento dá certo -> reprocessa e ack', async () => {
+      iniciarConsumerPubSub();
+      insertChain.returning.mockResolvedValueOnce([]);
+      selectChain.limit.mockResolvedValueOnce([{ id: 11, processadoEm: null }]);
+      processarEventoBrutoMock.mockResolvedValueOnce({ status: 'processado' });
+      const mensagem = criarMensagem({ notificationType: 'STATUS_REPORT', dataObjeto: {} });
+
+      subscriptionFakeRef.atual!.emit('message', mensagem);
+      await flushPromises();
+
+      expect(processarEventoBrutoMock).toHaveBeenCalledWith(11);
+      expect(mensagem.ack).toHaveBeenCalledOnce();
+      expect(mensagem.nack).not.toHaveBeenCalled();
+    });
+
+    it('linha existente NUNCA processada + reprocessamento falha de novo -> nack (continua elegível pra redelivery)', async () => {
+      iniciarConsumerPubSub();
+      insertChain.returning.mockResolvedValueOnce([]);
+      selectChain.limit.mockResolvedValueOnce([{ id: 12, processadoEm: null }]);
+      processarEventoBrutoMock.mockResolvedValueOnce({ status: 'erro', mensagem: 'ainda falha' });
+      const mensagem = criarMensagem({ notificationType: 'STATUS_REPORT', dataObjeto: {} });
+
+      subscriptionFakeRef.atual!.emit('message', mensagem);
+      await flushPromises();
+
+      expect(mensagem.nack).toHaveBeenCalledOnce();
+      expect(mensagem.ack).not.toHaveBeenCalled();
+    });
+
+    it('corrida rara (linha não encontrada na releitura) -> nack, nunca perde a mensagem', async () => {
+      iniciarConsumerPubSub();
+      insertChain.returning.mockResolvedValueOnce([]);
+      selectChain.limit.mockResolvedValueOnce([]);
+      const mensagem = criarMensagem({ notificationType: 'ENROLLMENT', dataObjeto: {} });
+
+      subscriptionFakeRef.atual!.emit('message', mensagem);
+      await flushPromises();
+
+      expect(processarEventoBrutoMock).not.toHaveBeenCalled();
+      expect(mensagem.nack).toHaveBeenCalledOnce();
+    });
   });
 
   it('erro fora do fluxo tratado (ex.: o próprio insert falha) -> nack, nunca fica sem resposta', async () => {

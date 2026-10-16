@@ -20,7 +20,14 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      # ESLint usa regras type-aware (typescript-eslint, parserOptions.project)
+      # — build um programa TS completo em memória, pesado o bastante pra
+      # estourar o heap default do V8 no runner padrão do GitHub Actions
+      # (crashou com "JavaScript heap out of memory" sem isso; na máquina
+      # local funciona porque o Node ajusta o heap pela RAM disponível).
       - run: npm run lint
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
       - run: npm run format:check
       - run: npm run typecheck
       - run: npm run build
@@ -72,6 +79,13 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      # `docs:openapi` roda via `tsx --env-file=.env` (ver scripts/gerar-
+      # openapi.ts/package.json) — o Node exige que esse arquivo EXISTA
+      # (erro "node: .env: not found" sem isso), mesmo que as variáveis
+      # reais venham do bloco `env:` abaixo (injetadas direto no processo,
+      # não dependem do conteúdo do arquivo) — na máquina local o `.env`
+      # sempre existe (ver docs/SETUP.md), no CI precisa ser criado.
+      - run: touch .env
       # Mesmo princípio de scripts/gerar-openapi.ts: nenhuma query roda de
       # verdade, mas o cliente Redis conecta no import do módulo
       # (lazyConnect: false) — por isso os serviços acima, mesmo sem
