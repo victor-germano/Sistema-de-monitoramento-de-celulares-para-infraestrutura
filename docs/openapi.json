@@ -262,18 +262,24 @@
                 "type": "object",
                 "properties": {
                   "colaboradorId": {
-                    "type": "string",
-                    "format": "uuid",
-                    "nullable": true
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid"
                   },
                   "linhaId": {
-                    "type": "string",
-                    "format": "uuid",
-                    "nullable": true
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid"
                   },
                   "patrimonio": {
-                    "type": "string",
-                    "nullable": true
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "ativo": {
                     "type": "boolean"
