@@ -5,7 +5,7 @@
 // (`processarEventoBruto`) usado tanto pelo consumer quanto pelo replay.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { eq } from 'drizzle-orm';
+import { eq, or } from 'drizzle-orm';
 import type { androidmanagement_v1 } from 'googleapis';
 import type * as DbClientModule from '../../src/db/client.ts';
 import type * as UsuariosSchemaModule from '../../src/db/schema/usuarios.ts';
@@ -248,6 +248,46 @@ describe('processarEnrollment — critério de aceite da Fase 4', () => {
       EnrollmentTokenInvalidoError,
     );
   });
+
+  // Achado numa revisão: SELECT + checar `usadoEm` + UPDATE depois não é
+  // atômico — duas transações concorrentes pro MESMO token podiam as duas
+  // passar o check antes de qualquer UPDATE comitar. Corrigido com um
+  // UPDATE ... WHERE usado_em IS NULL atômico (ver enrollment.ts). Este
+  // teste dispara duas transações de verdade em paralelo contra o Postgres
+  // real — não simula a corrida, deixa ela acontecer.
+  it('duas mensagens ENROLLMENT concorrentes pro mesmo token: só UMA cria dispositivo', async () => {
+    const token = await semearEnrollmentToken({});
+    const deviceA: Device = {
+      name: 'enterprises/x/devices/corrida-a',
+      enrollmentTokenData: JSON.stringify({ tokenId: token.id }),
+    };
+    const deviceB: Device = {
+      name: 'enterprises/x/devices/corrida-b',
+      enrollmentTokenData: JSON.stringify({ tokenId: token.id }),
+    };
+
+    const resultados = await Promise.allSettled([
+      db.transaction((tx) => processarEnrollment(tx, deviceA)),
+      db.transaction((tx) => processarEnrollment(tx, deviceB)),
+    ]);
+
+    const sucessos = resultados.filter((r) => r.status === 'fulfilled');
+    const falhas = resultados.filter((r) => r.status === 'rejected');
+    expect(sucessos).toHaveLength(1);
+    expect(falhas).toHaveLength(1);
+    expect((falhas[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+      EnrollmentTokenInvalidoError,
+    );
+
+    // Só o device da chamada que venceu a corrida existe — nunca os dois.
+    const dispositivosCriados = await db
+      .select()
+      .from(dispositivos)
+      .where(
+        or(eq(dispositivos.amapiName, deviceA.name!), eq(dispositivos.amapiName, deviceB.name!)),
+      );
+    expect(dispositivosCriados).toHaveLength(1);
+  });
 });
 
 describe('processarStatusReport', () => {
@@ -350,6 +390,123 @@ describe('processarStatusReport', () => {
     await expect(db.transaction((tx) => processarStatusReport(tx, device))).rejects.toBeInstanceOf(
       DispositivoDesconhecidoError,
     );
+  });
+
+  // Achado numa revisão: upsertDispositivoApps só fazia upsert, nunca
+  // removia — um app desinstalado deixava uma linha "fantasma" pra sempre,
+  // mascarando APP_OBRIGATORIO_AUSENTE mesmo com o app de verdade ausente.
+  it('remove do inventário um app que não aparece mais no STATUS_REPORT', async () => {
+    const dispositivoId = await semearDispositivoEnrollado();
+    const deviceComApp: Device = {
+      name: 'enterprises/LC00000000000000000/devices/dev-status',
+      applicationReports: [{ packageName: 'com.empresa.removido' }],
+    };
+    await db.transaction((tx) => processarStatusReport(tx, deviceComApp));
+    expect(
+      await db
+        .select()
+        .from(dispositivoApps)
+        .where(eq(dispositivoApps.dispositivoId, dispositivoId)),
+    ).toHaveLength(1);
+
+    const deviceSemApp: Device = {
+      name: 'enterprises/LC00000000000000000/devices/dev-status',
+      applicationReports: [],
+    };
+    await db.transaction((tx) => processarStatusReport(tx, deviceSemApp));
+
+    expect(
+      await db
+        .select()
+        .from(dispositivoApps)
+        .where(eq(dispositivoApps.dispositivoId, dispositivoId)),
+    ).toHaveLength(0);
+  });
+
+  it('um app obrigatório desinstalado (removido do relatório) é detectado como ausente', async () => {
+    const politicaId = await semearPoliticaComAppObrigatorio('com.empresa.obrigatorio');
+    const dispositivoId = await semearDispositivoEnrollado(politicaId);
+
+    await db.transaction((tx) =>
+      processarStatusReport(tx, {
+        name: 'enterprises/LC00000000000000000/devices/dev-status',
+        applicationReports: [{ packageName: 'com.empresa.obrigatorio' }],
+      }),
+    );
+    expect(
+      await db.select().from(alertas).where(eq(alertas.dispositivoId, dispositivoId)),
+    ).toHaveLength(0);
+
+    // App "desinstalado": próximo relatório não lista mais o pacote.
+    await db.transaction((tx) =>
+      processarStatusReport(tx, {
+        name: 'enterprises/LC00000000000000000/devices/dev-status',
+        applicationReports: [],
+      }),
+    );
+
+    const abertos = await db.select().from(alertas).where(eq(alertas.dispositivoId, dispositivoId));
+    expect(abertos).toHaveLength(1);
+    expect(abertos[0]?.tipo).toBe('APP_OBRIGATORIO_AUSENTE');
+  });
+
+  // Achado numa revisão: as duas saídas antecipadas de verificarAppsObrigatorios
+  // (sem política vinculada; política sem app obrigatório nenhum) nunca
+  // chegavam no resolverAlertaSeAberto — o alerta ficava aberto pra sempre.
+  describe('APP_OBRIGATORIO_AUSENTE se resolve sozinho quando o motivo desaparece', () => {
+    async function abrirAlertaDeAppAusente(politicaId: string): Promise<string> {
+      const dispositivoId = await semearDispositivoEnrollado(politicaId);
+      await db.transaction((tx) =>
+        processarStatusReport(tx, {
+          name: 'enterprises/LC00000000000000000/devices/dev-status',
+          applicationReports: [],
+        }),
+      );
+      const [alerta] = await db
+        .select()
+        .from(alertas)
+        .where(eq(alertas.dispositivoId, dispositivoId));
+      if (!alerta) throw new Error('setup falhou — alerta não abriu');
+      return dispositivoId;
+    }
+
+    it('resolve quando o device é desvinculado da política (politicaId vira null)', async () => {
+      const politicaId = await semearPoliticaComAppObrigatorio('com.empresa.obrigatorio');
+      const dispositivoId = await abrirAlertaDeAppAusente(politicaId);
+
+      await db
+        .update(dispositivos)
+        .set({ politicaId: null })
+        .where(eq(dispositivos.id, dispositivoId));
+      await db.transaction((tx) =>
+        processarStatusReport(tx, { name: 'enterprises/LC00000000000000000/devices/dev-status' }),
+      );
+
+      const [alerta] = await db
+        .select()
+        .from(alertas)
+        .where(eq(alertas.dispositivoId, dispositivoId));
+      expect(alerta?.resolvidoEm).not.toBeNull();
+    });
+
+    it('resolve quando a política deixa de exigir qualquer app FORCE_INSTALLED', async () => {
+      const politicaId = await semearPoliticaComAppObrigatorio('com.empresa.obrigatorio');
+      const dispositivoId = await abrirAlertaDeAppAusente(politicaId);
+
+      await db
+        .update(politicas)
+        .set({ payload: { applications: [] } })
+        .where(eq(politicas.id, politicaId));
+      await db.transaction((tx) =>
+        processarStatusReport(tx, { name: 'enterprises/LC00000000000000000/devices/dev-status' }),
+      );
+
+      const [alerta] = await db
+        .select()
+        .from(alertas)
+        .where(eq(alertas.dispositivoId, dispositivoId));
+      expect(alerta?.resolvidoEm).not.toBeNull();
+    });
   });
 });
 

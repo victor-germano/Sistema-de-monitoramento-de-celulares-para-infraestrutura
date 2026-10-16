@@ -12,6 +12,7 @@ import { executarScanPeriodico } from '../domain/alertas/motor.ts';
 import { purgarEventosBrutosAntigos } from '../domain/lgpd/retencao.ts';
 import { env } from '../config/env.ts';
 import { logger } from '../shared/logger.ts';
+import { ehExecutadoDiretamente } from '../shared/entrypoint.ts';
 
 export async function executarRodadaDeManutencao(): Promise<void> {
   try {
@@ -55,7 +56,7 @@ export function iniciarWorkerManutencao(): WorkerManutencao {
 
 // Entrypoint do processo dedicado — só roda quando o arquivo é executado
 // diretamente, não quando importado por teste.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (ehExecutadoDiretamente(import.meta.url, process.argv[1])) {
   const worker = iniciarWorkerManutencao();
 
   const desligar = (): void => {
