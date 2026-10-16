@@ -19,6 +19,19 @@ const REDACT_PATHS = [
   '*.serial',
   '*.iccid',
   '*.numero',
+  // Campo real enviado à AMAPI pra RESET_PASSWORD é `newPassword`, não
+  // `password` (ver src/integrations/amapi/commands.ts) — achado numa
+  // revisão de segurança: um erro bruto do googleapis/gaxios pode carregar
+  // o body da requisição original (com a senha) em profundidades variáveis
+  // dentro do objeto de erro, por isso os 3 níveis abaixo além do raso —
+  // defesa em profundidade; o ponto que de fato loga esse erro (`devices.
+  // routes.ts`) também para de logar o erro bruto, não confia só nisto.
+  '*.newPassword',
+  '*.novaSenha',
+  '*.*.newPassword',
+  '*.*.novaSenha',
+  '*.*.*.newPassword',
+  '*.*.*.novaSenha',
 ];
 
 // Exportamos as *opções*, não só a instância: o Fastify precisa construir o

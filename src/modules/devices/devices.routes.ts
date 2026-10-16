@@ -8,6 +8,7 @@ import { z } from 'zod';
 import {
   atualizarVinculoDispositivo,
   buscarDispositivoPorId,
+  buscarDispositivoPorPatrimonio,
   listarAppsDoDispositivo,
   listarDispositivos,
 } from '../../domain/dispositivos/repositorio.ts';
@@ -139,6 +140,13 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
       schema: { params: paramsIdSchema, body: patchBodySchema },
     },
     async (request, reply) => {
+      if (request.body.patrimonio) {
+        const emUsoPorOutro = await buscarDispositivoPorPatrimonio(request.body.patrimonio);
+        if (emUsoPorOutro && emUsoPorOutro.id !== request.params.id) {
+          return sendProblem(reply, 409, 'Patrimônio já vinculado a outro dispositivo', undefined);
+        }
+      }
+
       const dispositivo = await atualizarVinculoDispositivo(request.params.id, request.body);
       if (!dispositivo) {
         return sendProblem(reply, 404, 'Dispositivo não encontrado', undefined);
@@ -253,6 +261,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
             novaSenha: request.body.tipo === 'RESET_PASSWORD' ? request.body.novaSenha : undefined,
             pacotes: request.body.tipo === 'CLEAR_APP_DATA' ? request.body.pacotes : undefined,
           });
+          // Achado numa revisão: sem `nomeOperacao`, não há como o evento
+          // `COMMAND` do Pub/Sub correlacionar o resultado depois — marcar
+          // `ENVIADO` mesmo assim deixaria o comando travado nesse status
+          // pra sempre, sem erro visível pro técnico. Trata como falha de
+          // verdade (cai no `catch` abaixo, mesmo caminho de FALHA/502).
+          if (!emitido.nomeOperacao) {
+            throw new Error(
+              'AMAPI não retornou o nome da operação — não é possível acompanhar o resultado deste comando',
+            );
+          }
           // `ENVIADO`, não `SUCESSO` — o resultado final só chega depois,
           // via evento `COMMAND` do Pub/Sub (`src/domain/eventos/handlers/
           // command.ts`, Fase 5), correlacionado por `amapiOperationName`.
@@ -267,7 +285,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
           .update(comandos)
           .set({ status: 'FALHA', erro: mensagem })
           .where(eq(comandos.id, comando.id));
-        logger.error({ err: erro, comandoId: comando.id }, 'falha ao emitir comando na AMAPI');
+        // NUNCA `{ err: erro }` aqui: pra RESET_PASSWORD, `erro` pode ser um
+        // erro bruto do googleapis/gaxios carregando o body da requisição
+        // original (com `newPassword`) em profundidade variável — o
+        // serializer padrão do Pino copiaria isso pro log. Só a mensagem,
+        // que nunca contém o payload da requisição, é segura de logar aqui
+        // (achado numa revisão de segurança, ver PROJECT_MEMORY.md).
+        logger.error(
+          { erroMensagem: mensagem, comandoId: comando.id, tipo: request.body.tipo },
+          'falha ao emitir comando na AMAPI',
+        );
         return sendProblem(reply, 502, 'Falha ao emitir comando na AMAPI', mensagem);
       }
 

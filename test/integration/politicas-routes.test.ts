@@ -352,4 +352,31 @@ describe('GET /policies', () => {
     });
     expect(response.statusCode).toBe(403);
   });
+
+  it('filtra por ?ativa=false/true corretamente (achado numa revisão)', async () => {
+    // z.coerce.boolean() fazia Boolean("false") === true — ?ativa=false
+    // devolvia política ATIVA, o contrário do pedido.
+    const criada = await app.inject({
+      method: 'POST',
+      url: '/policies',
+      headers: authHeader('ADMIN'),
+      payload: { nome: 'pra-filtro-booleano', payload: {} },
+    });
+    const { id } = criada.json<{ id: string }>();
+    await app.inject({ method: 'DELETE', url: `/policies/${id}`, headers: authHeader('ADMIN') });
+
+    const inativas = await app.inject({
+      method: 'GET',
+      url: '/policies?ativa=false',
+      headers: authHeader('ADMIN'),
+    });
+    expect(inativas.json<{ id: string }[]>().some((p) => p.id === id)).toBe(true);
+
+    const ativas = await app.inject({
+      method: 'GET',
+      url: '/policies?ativa=true',
+      headers: authHeader('ADMIN'),
+    });
+    expect(ativas.json<{ id: string }[]>().some((p) => p.id === id)).toBe(false);
+  });
 });

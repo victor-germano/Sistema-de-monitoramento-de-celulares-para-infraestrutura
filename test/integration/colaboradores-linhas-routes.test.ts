@@ -116,6 +116,27 @@ describe('/colaboradores', () => {
     const corpo = editado.json<{ departamento: string; ativo: boolean }>();
     expect(corpo.departamento).toBe('Financeiro');
     expect(corpo.ativo).toBe(false);
+
+    // Achado numa revisão: `?ativo=false` usava z.coerce.boolean(), que faz
+    // Boolean("false") === true — o filtro aplicado era o CONTRÁRIO do
+    // pedido. Prova direta contra a API real, não só a unidade do schema.
+    const filtradoInativo = await app.inject({
+      method: 'GET',
+      url: '/colaboradores?ativo=false',
+      headers: authHeader('VIEWER'),
+    });
+    expect(filtradoInativo.json<{ itens: { id: string }[] }>().itens.some((c) => c.id === id)).toBe(
+      true,
+    );
+
+    const filtradoAtivo = await app.inject({
+      method: 'GET',
+      url: '/colaboradores?ativo=true',
+      headers: authHeader('VIEWER'),
+    });
+    expect(filtradoAtivo.json<{ itens: { id: string }[] }>().itens.some((c) => c.id === id)).toBe(
+      false,
+    );
   });
 
   it('recusa matrícula duplicada com 409', async () => {
@@ -142,6 +163,36 @@ describe('/colaboradores', () => {
     });
     expect(response.statusCode).toBe(404);
   });
+
+  // Achado numa revisão: sem escapar, `%` no termo de busca é wildcard do
+  // ILIKE, não caractere literal — buscar por "100%" batia em qualquer
+  // nome contendo "100" seguido de QUALQUER COISA, não só em quem tem o
+  // "%" de verdade no nome. Este teste prova a diferença: busca por "100%"
+  // tem que achar só quem tem o "%" literal, nunca "100X...".
+  it('busca por "%" literal não vira wildcard — só acha quem tem o caractere de verdade', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/colaboradores',
+      headers: authHeader('ADMIN'),
+      payload: { matricula: `mat-pct-${Date.now()}`, nome: '100% Aprovado' },
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/colaboradores',
+      headers: authHeader('ADMIN'),
+      payload: { matricula: `mat-pct2-${Date.now()}`, nome: '100X Aprovado' },
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/colaboradores?busca=${encodeURIComponent('100%')}`,
+      headers: authHeader('ADMIN'),
+    });
+    expect(response.statusCode).toBe(200);
+    const nomes = response.json<{ itens: { nome: string }[] }>().itens.map((c) => c.nome);
+    expect(nomes).toContain('100% Aprovado');
+    expect(nomes).not.toContain('100X Aprovado');
+  });
 });
 
 describe('/linhas', () => {
@@ -162,8 +213,12 @@ describe('/linhas', () => {
       payload: { numero: '+5511999990000', operadora: 'Vivo', valorMensal: 89.9, planoDadosGb: 20 },
     });
     expect(criada.statusCode).toBe(201);
-    const { id } = criada.json<{ id: string; valorMensal: string }>();
-    expect(criada.json<{ valorMensal: string }>().valorMensal).toBe('89.90');
+    // Achado numa revisão: `valorMensal` precisa voltar como NÚMERO (seção
+    // de contrato de docs/api/colaboradores-e-linhas.md), não a string crua
+    // do driver Postgres (`numeric` chega como string) — este teste falhava
+    // com '89.90'/'0.00' antes do fix em linhas.routes.ts.
+    const { id } = criada.json<{ id: string; valorMensal: number }>();
+    expect(criada.json<{ valorMensal: number }>().valorMensal).toBe(89.9);
 
     const listada = await app.inject({
       method: 'GET',
@@ -171,7 +226,10 @@ describe('/linhas', () => {
       headers: authHeader('VIEWER'),
     });
     expect(listada.statusCode).toBe(200);
-    expect(listada.json<{ itens: { id: string }[] }>().itens.some((l) => l.id === id)).toBe(true);
+    const itemListado = listada
+      .json<{ itens: { id: string; valorMensal: number }[] }>()
+      .itens.find((l) => l.id === id);
+    expect(itemListado?.valorMensal).toBe(89.9);
 
     const editada = await app.inject({
       method: 'PATCH',
@@ -180,9 +238,9 @@ describe('/linhas', () => {
       payload: { status: 'suspensa', valorMensal: 0 },
     });
     expect(editada.statusCode).toBe(200);
-    const corpo = editada.json<{ status: string; valorMensal: string }>();
+    const corpo = editada.json<{ status: string; valorMensal: number }>();
     expect(corpo.status).toBe('suspensa');
-    expect(corpo.valorMensal).toBe('0.00');
+    expect(corpo.valorMensal).toBe(0);
   });
 
   it('recusa número duplicado com 409', async () => {
