@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type * as DbClientModule from '../../src/db/client.ts';
 import type * as UsuariosSchemaModule from '../../src/db/schema/usuarios.ts';
@@ -231,6 +231,32 @@ describe('POST /devices/:id/comandos — falha da AMAPI', () => {
       payload: { tipo: 'REBOOT' },
     });
     expect(response.statusCode).toBe(502);
+  });
+
+  // Achado numa revisão: sem `name` na resposta, o Drizzle descartava
+  // silenciosamente a chave `amapiOperationName: undefined` no `.set()` — o
+  // comando ficava marcado ENVIADO com a coluna NULL, travado pra sempre
+  // (o evento COMMAND nunca teria como correlacionar de volta). Agora trata
+  // como falha de verdade.
+  it('502 e status FALHA quando a AMAPI não retorna o nome da operação', async () => {
+    clienteFake.enterprises.devices.issueCommand.mockResolvedValueOnce({ data: {} });
+    const response = await app.inject({
+      method: 'POST',
+      url: `/devices/${dispositivoId}/comandos`,
+      headers: authHeader('TECNICO'),
+      payload: { tipo: 'LOCK' },
+    });
+    expect(response.statusCode).toBe(502);
+
+    // 502 devolve Problem Details, sem o id do comando — busca direto a
+    // linha mais recente deste dispositivo pra conferir o estado persistido.
+    const linhas = await db
+      .select()
+      .from(comandos)
+      .where(eq(comandos.dispositivoId, dispositivoId))
+      .orderBy(desc(comandos.solicitadoEm));
+    expect(linhas[0]?.status).toBe('FALHA');
+    expect(linhas[0]?.amapiOperationName).toBeNull();
   });
 });
 

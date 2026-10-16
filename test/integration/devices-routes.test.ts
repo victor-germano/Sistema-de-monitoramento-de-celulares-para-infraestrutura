@@ -171,6 +171,37 @@ describe('GET /devices/:id', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json<{ id: string }>().id).toBe(dispositivoId);
   });
+
+  // Achado verificando a tela de detalhe do frontend: `buscarDispositivoPorId`
+  // não fazia o mesmo `leftJoin` com `colaboradores` que `listarDispositivos`
+  // já fazia — o mesmo dispositivo aparecia com o nome do colaborador em
+  // `GET /devices`, mas vazio em `GET /devices/:id`.
+  it('inclui colaboradorNome quando o dispositivo tem colaborador vinculado — mesmo formato de GET /devices', async () => {
+    const { colaboradores } = await import('../../src/db/schema/colaboradores.ts');
+    const [colaborador] = await db
+      .insert(colaboradores)
+      .values({ matricula: 'MAT-GETID', nome: 'Colaborador de Teste' })
+      .returning();
+    if (!colaborador) throw new Error('falha ao semear colaborador');
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/devices/${dispositivoId}`,
+      headers: authHeader('ADMIN'),
+      payload: { colaboradorId: colaborador.id },
+    });
+    expect(patch.statusCode).toBe(200);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/devices/${dispositivoId}`,
+      headers: authHeader('VIEWER'),
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ colaboradorNome: string | null }>().colaboradorNome).toBe(
+      'Colaborador de Teste',
+    );
+  });
 });
 
 describe('PATCH /devices/:id', () => {
@@ -208,6 +239,26 @@ describe('PATCH /devices/:id', () => {
     expect(linhasAuditoria.some((linha) => linha.acao === 'DISPOSITIVO_VINCULO_ALTERADO')).toBe(
       true,
     );
+  });
+
+  // Achado numa revisão: sem checar antes, isso batia direto no índice
+  // único de `patrimonio` e quebrava com 500 genérico, em vez do 409
+  // amigável que o mesmo padrão já usa pra matrícula/número.
+  it('recusa com 409 (não 500) vincular um patrimônio já usado por outro dispositivo', async () => {
+    const { dispositivos } = await import('../../src/db/schema/dispositivos.ts');
+    const [outro] = await db
+      .insert(dispositivos)
+      .values({ amapiName: 'enterprises/x/devices/outro-dispositivo', patrimonio: 'PAT-JA-EXISTE' })
+      .returning();
+    if (!outro) throw new Error('setup falhou — segundo dispositivo não foi criado');
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/devices/${dispositivoId}`,
+      headers: authHeader('ADMIN'),
+      payload: { patrimonio: 'PAT-JA-EXISTE' },
+    });
+    expect(response.statusCode).toBe(409);
   });
 });
 

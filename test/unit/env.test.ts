@@ -104,6 +104,30 @@ describe('envSchema', () => {
     }
   });
 
+  // Achado numa revisão: sem normalizar aqui, um valor com maiúscula (bem
+  // plausível — copiado de uma assinatura de e-mail) nunca batia contra o
+  // e-mail do provedor OIDC (sempre em minúsculas na comparação), travando
+  // o primeiro ADMIN como VIEWER silenciosamente (ADR-012).
+  it('normaliza BOOTSTRAP_ADMIN_EMAILS pra minúsculas', () => {
+    const result = envSchema.safeParse({
+      ...base,
+      BOOTSTRAP_ADMIN_EMAILS: 'Victor@GrupoRoveri.com.br',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.BOOTSTRAP_ADMIN_EMAILS).toEqual(['victor@gruporoveri.com.br']);
+    }
+  });
+
+  // Achado numa revisão: `.min(1)` rodava na string crua, antes do split —
+  // um valor só com vírgula passava a validação e só depois virava lista
+  // vazia, deixando o app subir sem erro nenhum apontando a configuração
+  // quebrada (todo login falharia silenciosamente).
+  it('rejeita ALLOWED_EMAIL_DOMAINS que só tem vírgula/espaço (vira lista vazia depois do split)', () => {
+    const result = envSchema.safeParse({ ...base, ALLOWED_EMAIL_DOMAINS: ' , ' });
+    expect(result.success).toBe(false);
+  });
+
   it('rejeita AMAPI_ENTERPRISE_NAME fora do formato enterprises/<id>', () => {
     const result = envSchema.safeParse({ ...base, AMAPI_ENTERPRISE_NAME: 'LC00000000000000000' });
     expect(result.success).toBe(false);
