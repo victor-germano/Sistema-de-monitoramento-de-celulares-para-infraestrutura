@@ -179,6 +179,23 @@ describe('PATCH /usuarios/:id — proteção do último ADMIN (ADR-013)', () => 
   });
 });
 
+describe('RBAC — autenticação vem antes da validação do schema (achado em revisão de segurança)', () => {
+  it('POST /policies sem token e com body vazio: 401, nunca o 400 de "nome Required"', async () => {
+    const response = await app.inject({ method: 'POST', url: '/policies', payload: {} });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('POST /devices/:id/comandos com papel sem permissão (VIEWER) e body vazio: 403, não 400', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/devices/00000000-0000-7000-8000-000000000000/comandos',
+      headers: authHeader('VIEWER'),
+      payload: {},
+    });
+    expect(response.statusCode).toBe(403);
+  });
+});
+
 describe('RBAC — GET /auth/me (qualquer papel autenticado)', () => {
   it('rejeita sem token com 401', async () => {
     const response = await app.inject({ method: 'GET', url: '/auth/me' });
