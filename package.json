@@ -55,7 +55,7 @@
     "fastify-type-provider-zod": "^4.0.2",
     "googleapis": "^178.0.0",
     "ioredis": "^5.4.2",
-    "jose": "^5.9.6",
+    "jose": "^6.2.12",
     "openid-client": "^6.1.7",
     "pino": "^9.6.0",
     "postgres": "^3.4.5",
