@@ -12,6 +12,7 @@ import {
 } from '../queues/policy-write-queue.ts';
 import { salvarPolitica, type PolicyPayload } from '../integrations/amapi/policies.ts';
 import { logger } from '../shared/logger.ts';
+import { ehExecutadoDiretamente } from '../shared/entrypoint.ts';
 
 export function iniciarWorkerEscritaPolitica(): Worker {
   const worker = criarWorkerEscritaPolitica(async (dados): Promise<PolicyPayload> =>
@@ -23,7 +24,7 @@ export function iniciarWorkerEscritaPolitica(): Worker {
 
 // Entrypoint do processo dedicado — só roda quando o arquivo é executado
 // diretamente, não quando importado por teste.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (ehExecutadoDiretamente(import.meta.url, process.argv[1])) {
   const worker = iniciarWorkerEscritaPolitica();
 
   const desligar = async (): Promise<void> => {

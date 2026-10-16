@@ -15,6 +15,7 @@ import {
 import { registrarAuditoria } from '../../domain/auditoria/registrar.ts';
 import { db } from '../../db/client.ts';
 import { sendProblem } from '../../shared/problem-details.ts';
+import { zQueryBoolean } from '../../shared/zod-query.ts';
 import { withRole } from '../../plugins/rbac.ts';
 
 const paramsIdSchema = z.object({ id: z.string().uuid() });
@@ -23,7 +24,7 @@ const listarQuerySchema = z.object({
   dispositivoId: z.string().uuid().optional(),
   tipo: z.enum(alertaTipoEnum.enumValues).optional(),
   severidade: z.enum(alertaSeveridadeEnum.enumValues).optional(),
-  aberto: z.coerce.boolean().optional(),
+  aberto: zQueryBoolean.optional(),
   limit: z.coerce.number().int().positive().max(100).optional(),
   cursor: z.string().uuid().optional(),
 });
