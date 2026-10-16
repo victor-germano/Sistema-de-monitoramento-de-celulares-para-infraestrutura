@@ -53,6 +53,25 @@ function obterEventosFila(): QueueEvents {
 }
 
 /**
+ * Lançado quando `waitUntilFinished` estoura o timeout — distinto de um erro
+ * real da AMAPI (payload recusado, etc.): aqui não sabemos ainda se o job
+ * vai dar certo ou errado, só que demorou mais que o esperado. Quem chama
+ * NUNCA deve tratar isso como "a escrita falhou" (ver `aposTimeout` abaixo).
+ */
+export class EscritaPoliticaTimeoutError extends Error {
+  constructor(nomePolitica: string, timeoutMs: number) {
+    super(
+      `Timeout (${timeoutMs}ms) esperando a escrita da política "${nomePolitica}" — ` +
+        'o job continua rodando em segundo plano, o resultado final ainda não é conhecido.',
+    );
+    this.name = 'EscritaPoliticaTimeoutError';
+  }
+}
+
+export type ResultadoEscritaPolitica =
+  { status: 'sucesso'; payload: PolicyPayload } | { status: 'falha'; erro: unknown };
+
+/**
  * As rotas HTTP de política (Fase 5, `POST`/`PATCH /policies`) precisam do
  * resultado — ou do erro — da escrita antes de responder ao admin (ex.:
  * `enforceInvariants` corrigiu algo? a AMAPI recusou o payload com 400?).
@@ -60,13 +79,60 @@ function obterEventosFila(): QueueEvents {
  * o job termina, ou rejeita com o erro que o processador lançou — a rota
  * só precisa fazer `try/catch` em cima disto, sem saber que existe uma fila
  * por trás.
+ *
+ * Achado numa revisão: o BullMQ não cancela o job quando `waitUntilFinished`
+ * estoura o timeout — ele continua rodando e pode terminar com sucesso
+ * depois, na AMAPI de verdade, sem que exista mais ninguém esperando o
+ * resultado pra persistir isso localmente (o inverso exato do que o ADR-023
+ * promete evitar). `aposTimeout`, quando passado, é chamado — sempre, erro
+ * ou sucesso, mesmo que só depois da função já ter retornado/lançado — com
+ * o resultado real, pra quem chamou poder reconciliar o estado local
+ * (ex.: aplicar a mesma lógica de sucesso/falha que aplicaria se tivesse
+ * dado tempo).
  */
 export async function executarEscritaPoliticaSincrona(
   dados: EscritaPoliticaJobData,
-  timeoutMs = 30_000,
+  opcoes: { timeoutMs?: number; aposTimeout?: (resultado: ResultadoEscritaPolitica) => void } = {},
 ): Promise<PolicyPayload> {
+  const { timeoutMs = 30_000, aposTimeout } = opcoes;
   const job = await enfileirarEscritaPolitica(dados);
-  return job.waitUntilFinished(obterEventosFila(), timeoutMs) as Promise<PolicyPayload>;
+
+  try {
+    return (await job.waitUntilFinished(obterEventosFila(), timeoutMs)) as PolicyPayload;
+  } catch (erro) {
+    if (!(erro instanceof Error) || !erro.message.includes('timed out')) {
+      throw erro; // erro real do processador (AMAPI recusou, etc.) — não é timeout.
+    }
+
+    if (aposTimeout) {
+      // SÓ chama `waitUntilFinished` de novo (um segundo listener pro mesmo
+      // job) aqui dentro, depois de confirmar que é timeout — achado numa
+      // revisão do PRÓPRIO fix: criar esse segundo listener incondicionalmente
+      // (antes do `try`) deixava uma promise sem handler no caminho feliz
+      // (timeout nunca acontece) — se o job falhasse DEPOIS que a primeira
+      // chamada já tivesse retornado, virava um unhandled rejection de
+      // verdade (pego por um teste real, não só em teoria).
+      const resultadoFinal = job.waitUntilFinished(obterEventosFila()) as Promise<PolicyPayload>;
+      // `.then(onSucesso, onFalha)`, não `.then(...).catch(...)`: a segunda
+      // forma trataria um erro LANÇADO DENTRO de `onSucesso` como falha da
+      // escrita, não como bug do próprio callback. O `.catch` externo só
+      // existe pra nunca deixar uma exceção do callback virar unhandled
+      // rejection — vira log, não propaga pra lugar nenhum (não há mais
+      // ninguém esperando este resultado).
+      resultadoFinal
+        .then(
+          (payload) => aposTimeout({ status: 'sucesso', payload }),
+          (erroFinal: unknown) => aposTimeout({ status: 'falha', erro: erroFinal }),
+        )
+        .catch((erroCallback: unknown) => {
+          logger.error(
+            { err: erroCallback },
+            'falha ao executar aposTimeout (reconciliação tardia) da escrita de política',
+          );
+        });
+    }
+    throw new EscritaPoliticaTimeoutError(dados.nomePolitica, timeoutMs);
+  }
 }
 
 export type ProcessadorEscritaPolitica = (dados: EscritaPoliticaJobData) => Promise<unknown>;

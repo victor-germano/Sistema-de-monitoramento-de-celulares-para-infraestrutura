@@ -19,11 +19,13 @@
 // `src/domain/eventos/processar-evento.ts`, compartilhado com o replay
 // manual — este arquivo só cuida do que é específico de mensagem Pub/Sub
 // de verdade: ack/nack e o watchdog de saúde da subscription.
+import { eq } from 'drizzle-orm';
 import { PubSub, type Message } from '@google-cloud/pubsub';
 import { env } from '../config/env.ts';
 import { db } from '../db/client.ts';
 import { eventosBrutos } from '../db/schema/eventos-brutos.ts';
 import { logger } from '../shared/logger.ts';
+import { ehExecutadoDiretamente } from '../shared/entrypoint.ts';
 import { criarWatchdog } from './watchdog.ts';
 import { processarEventoBruto } from '../domain/eventos/processar-evento.ts';
 
@@ -81,20 +83,61 @@ async function processarMensagem(message: Message): Promise<void> {
     .onConflictDoNothing({ target: eventosBrutos.messageId })
     .returning();
 
-  if (!eventoBruto) {
-    // Redelivery de uma mensagem já registrada (at-least-once é a regra, não
-    // exceção). Se já processou, não reprocessa; se falhou antes, fica
-    // pendente pra `POST /internal/pubsub/replay` decidir — o consumer não
-    // re-tenta sozinho em loop silencioso.
+  if (eventoBruto) {
+    await processarEExecutarAckNack(message, eventoBruto.id, notificationType);
+    return;
+  }
+
+  // Redelivery de uma mensagem já registrada (at-least-once é a regra, não
+  // exceção) — `onConflictDoNothing` não devolveu linha, mas ela existe.
+  // Achado numa revisão: antes, QUALQUER redelivery acabava em `ack()`
+  // incondicional, mesmo quando a tentativa anterior tinha falhado por um
+  // erro transitório (ex.: blip momentâneo do banco) — exatamente o tipo de
+  // erro que uma redelivery deveria poder resolver sozinha, sem depender de
+  // alguém chamar `POST /internal/pubsub/replay` manualmente. Agora só
+  // confirma sem reprocessar quando a linha existente já foi processada com
+  // sucesso (`processado_em` preenchido).
+  const [existente] = await db
+    .select()
+    .from(eventosBrutos)
+    .where(eq(eventosBrutos.messageId, message.id))
+    .limit(1);
+
+  if (!existente) {
+    // Corrida rara entre o INSERT acima e esta SELECT (outra entrega
+    // concorrente apagada por LGPD entretanto?) — nack pra tentar de novo,
+    // nunca perder a mensagem.
+    logger.warn(
+      { messageId: message.id },
+      'Pub/Sub: conflito no insert mas linha não encontrada na releitura — nack pra tentar de novo',
+    );
+    message.nack();
+    return;
+  }
+
+  if (existente.processadoEm) {
     logger.info(
       { messageId: message.id },
-      'Pub/Sub: mensagem já registrada (redelivery), ack sem reprocessar',
+      'Pub/Sub: mensagem já processada com sucesso antes (redelivery), ack sem reprocessar',
     );
     message.ack();
     return;
   }
 
-  const resultado = await processarEventoBruto(eventoBruto.id);
+  logger.info(
+    { messageId: message.id },
+    'Pub/Sub: redelivery de mensagem que falhou antes — tentando reprocessar',
+  );
+  await processarEExecutarAckNack(message, existente.id, notificationType);
+}
+
+/** Núcleo comum ao caminho de inserção nova e ao de redelivery — mesma decisão de ack/nack nos dois. */
+async function processarEExecutarAckNack(
+  message: Message,
+  eventoBrutoId: number,
+  notificationType: string,
+): Promise<void> {
+  const resultado = await processarEventoBruto(eventoBrutoId);
   if (resultado.status === 'erro') {
     logger.error(
       { messageId: message.id, notificationType, erro: resultado.mensagem },
@@ -158,7 +201,7 @@ export function iniciarConsumerPubSub(): ConsumerPubSub {
 
 // Entrypoint do processo dedicado (`npm run worker:pubsub`) — só roda
 // quando o arquivo é executado diretamente, não quando importado por teste.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (ehExecutadoDiretamente(import.meta.url, process.argv[1])) {
   const consumer = iniciarConsumerPubSub();
 
   const desligar = async (): Promise<void> => {
