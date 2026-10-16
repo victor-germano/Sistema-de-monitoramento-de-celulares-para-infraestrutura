@@ -25,6 +25,7 @@ import { env } from '../config/env.ts';
 import { db } from '../db/client.ts';
 import { eventosBrutos } from '../db/schema/eventos-brutos.ts';
 import { logger } from '../shared/logger.ts';
+import { ehExecutadoDiretamente } from '../shared/entrypoint.ts';
 import { criarWatchdog } from './watchdog.ts';
 import { processarEventoBruto } from '../domain/eventos/processar-evento.ts';
 
@@ -200,7 +201,7 @@ export function iniciarConsumerPubSub(): ConsumerPubSub {
 
 // Entrypoint do processo dedicado (`npm run worker:pubsub`) — só roda
 // quando o arquivo é executado diretamente, não quando importado por teste.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (ehExecutadoDiretamente(import.meta.url, process.argv[1])) {
   const consumer = iniciarConsumerPubSub();
 
   const desligar = async (): Promise<void> => {
