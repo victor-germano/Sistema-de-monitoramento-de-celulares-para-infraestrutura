@@ -3,7 +3,7 @@ import type {
   FastifyInstance,
   FastifyReply,
   FastifyRequest,
-  preHandlerAsyncHookHandler,
+  preValidationAsyncHookHandler,
 } from 'fastify';
 import type { Role } from '../db/schema/usuarios.ts';
 import { sendProblem } from '../shared/problem-details.ts';
@@ -28,7 +28,7 @@ export interface RouteAccessInfo {
   public?: boolean;
 }
 
-function requireRole(roles: readonly Role[]): preHandlerAsyncHookHandler {
+function requireRole(roles: readonly Role[]): preValidationAsyncHookHandler {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     if (!request.user) {
       sendProblem(
@@ -52,15 +52,22 @@ function requireRole(roles: readonly Role[]): preHandlerAsyncHookHandler {
 
 /**
  * Uso: `app.get('/rota', { ...withRole('ADMIN', 'TECNICO') }, handler)`.
- * Empacota `preHandler` (o que de fato bloqueia) e `config.roles` (metadado
- * que o teste "toda rota declara papel" verifica) numa chamada só — não dá
- * pra esquecer de um sem o outro, porque são a mesma chamada.
+ * Empacota `preValidation` (o que de fato bloqueia) e `config.roles`
+ * (metadado que o teste "toda rota declara papel" verifica) numa chamada só
+ * — não dá pra esquecer de um sem o outro, porque são a mesma chamada.
+ *
+ * `preValidation`, não `preHandler`: no ciclo de vida do Fastify,
+ * `preValidation` roda ANTES da validação do schema Zod do body/query;
+ * `preHandler` roda DEPOIS. Com `preHandler`, uma requisição anônima (ou com
+ * papel errado) e body inválido recebia 400 — revelando os campos exatos da
+ * rota protegida pra quem nem autenticou — em vez do 401/403 que deveria
+ * vir primeiro. Achado numa revisão de segurança (ver PROJECT_MEMORY.md).
  */
 export function withRole(...roles: readonly Role[]): {
   config: { roles: readonly Role[] };
-  preHandler: preHandlerAsyncHookHandler;
+  preValidation: preValidationAsyncHookHandler;
 } {
-  return { config: { roles }, preHandler: requireRole(roles) };
+  return { config: { roles }, preValidation: requireRole(roles) };
 }
 
 /** Uso: `app.get('/rota', PUBLICA, handler)` — rota sem autenticação, declarada de propósito. */

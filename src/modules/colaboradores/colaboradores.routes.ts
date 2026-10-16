@@ -14,6 +14,7 @@ import {
 import { registrarAuditoria } from '../../domain/auditoria/registrar.ts';
 import { db } from '../../db/client.ts';
 import { sendProblem } from '../../shared/problem-details.ts';
+import { zQueryBoolean } from '../../shared/zod-query.ts';
 import { withRole } from '../../plugins/rbac.ts';
 
 const paramsIdSchema = z.object({ id: z.string().uuid() });
@@ -21,7 +22,7 @@ const paramsIdSchema = z.object({ id: z.string().uuid() });
 const listarQuerySchema = z.object({
   filial: z.string().optional(),
   departamento: z.string().optional(),
-  ativo: z.coerce.boolean().optional(),
+  ativo: zQueryBoolean.optional(),
   busca: z.string().optional(),
   limit: z.coerce.number().int().positive().max(100).optional(),
   cursor: z.string().uuid().optional(),
