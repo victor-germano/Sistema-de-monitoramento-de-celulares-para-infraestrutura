@@ -33,42 +33,45 @@ function paraRegistro<T extends string | null>(
 }
 
 export async function obterResumoDashboard(): Promise<ResumoDashboard> {
-  const [totalDispositivos] = await db.select({ total: count() }).from(dispositivos);
-  const [dispositivosAtivos] = await db
-    .select({ total: count() })
-    .from(dispositivos)
-    .where(eq(dispositivos.ativo, true));
-  const porCompliance = await db
-    .select({ chave: dispositivos.complianceState, total: count() })
-    .from(dispositivos)
-    .groupBy(dispositivos.complianceState);
-
-  const [totalAlertasAbertos] = await db
-    .select({ total: count() })
-    .from(alertas)
-    .where(isNull(alertas.resolvidoEm));
-  const alertasPorTipo = await db
-    .select({ chave: alertas.tipo, total: count() })
-    .from(alertas)
-    .where(isNull(alertas.resolvidoEm))
-    .groupBy(alertas.tipo);
-  const alertasPorSeveridade = await db
-    .select({ chave: alertas.severidade, total: count() })
-    .from(alertas)
-    .where(isNull(alertas.resolvidoEm))
-    .groupBy(alertas.severidade);
-
-  const [totalColaboradores] = await db.select({ total: count() }).from(colaboradores);
-  const [colaboradoresAtivos] = await db
-    .select({ total: count() })
-    .from(colaboradores)
-    .where(eq(colaboradores.ativo, true));
-
-  const [totalLinhas] = await db.select({ total: count() }).from(linhas);
-  const linhasPorStatus = await db
-    .select({ chave: linhas.status, total: count() })
-    .from(linhas)
-    .groupBy(linhas.status);
+  // Achado numa revisão de eficiência: as 10 queries abaixo são
+  // independentes entre si (nenhuma usa o resultado de outra) — rodavam em
+  // 10 awaits sequenciais, uma depois da outra. `Promise.all` manda todas
+  // pro pool de conexões de uma vez; o tempo de resposta passa a ser o da
+  // query mais lenta, não a SOMA de todas.
+  const [
+    [totalDispositivos],
+    [dispositivosAtivos],
+    porCompliance,
+    [totalAlertasAbertos],
+    alertasPorTipo,
+    alertasPorSeveridade,
+    [totalColaboradores],
+    [colaboradoresAtivos],
+    [totalLinhas],
+    linhasPorStatus,
+  ] = await Promise.all([
+    db.select({ total: count() }).from(dispositivos),
+    db.select({ total: count() }).from(dispositivos).where(eq(dispositivos.ativo, true)),
+    db
+      .select({ chave: dispositivos.complianceState, total: count() })
+      .from(dispositivos)
+      .groupBy(dispositivos.complianceState),
+    db.select({ total: count() }).from(alertas).where(isNull(alertas.resolvidoEm)),
+    db
+      .select({ chave: alertas.tipo, total: count() })
+      .from(alertas)
+      .where(isNull(alertas.resolvidoEm))
+      .groupBy(alertas.tipo),
+    db
+      .select({ chave: alertas.severidade, total: count() })
+      .from(alertas)
+      .where(isNull(alertas.resolvidoEm))
+      .groupBy(alertas.severidade),
+    db.select({ total: count() }).from(colaboradores),
+    db.select({ total: count() }).from(colaboradores).where(eq(colaboradores.ativo, true)),
+    db.select({ total: count() }).from(linhas),
+    db.select({ chave: linhas.status, total: count() }).from(linhas).groupBy(linhas.status),
+  ]);
 
   return {
     dispositivos: {

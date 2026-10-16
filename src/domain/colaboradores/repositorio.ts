@@ -1,6 +1,7 @@
 import { and, eq, gt, ilike, or } from 'drizzle-orm';
 import { db } from '../../db/client.ts';
 import { colaboradores } from '../../db/schema/colaboradores.ts';
+import { escaparTermoBusca } from '../../shared/sql-like.ts';
 
 export type Colaborador = typeof colaboradores.$inferSelect;
 export type NovoColaborador = typeof colaboradores.$inferInsert;
@@ -68,7 +69,7 @@ export async function listarColaboradores(
   if (filtros.departamento) condicoes.push(eq(colaboradores.departamento, filtros.departamento));
   if (filtros.ativo !== undefined) condicoes.push(eq(colaboradores.ativo, filtros.ativo));
   if (filtros.busca) {
-    const termo = `%${filtros.busca}%`;
+    const termo = `%${escaparTermoBusca(filtros.busca)}%`;
     condicoes.push(
       or(
         ilike(colaboradores.nome, termo),

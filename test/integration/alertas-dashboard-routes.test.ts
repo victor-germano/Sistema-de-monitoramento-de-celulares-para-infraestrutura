@@ -155,6 +155,65 @@ describe('POST /alertas/:id/reconhecer e /resolver', () => {
     });
     expect(response.statusCode).toBe(404);
   });
+
+  it('filtra por ?aberto=false/true corretamente (achado numa revisão) — usa o alerta já resolvido acima', async () => {
+    // z.coerce.boolean() fazia Boolean("false") === true — ?aberto=false
+    // devolvia alerta ABERTO, o contrário do pedido.
+    const resolvidos = await app.inject({
+      method: 'GET',
+      url: '/alertas?aberto=false',
+      headers: authHeader('ADMIN'),
+    });
+    expect(
+      resolvidos.json<{ itens: { id: string }[] }>().itens.some((a) => a.id === alertaId),
+    ).toBe(true);
+
+    const abertos = await app.inject({
+      method: 'GET',
+      url: '/alertas?aberto=true',
+      headers: authHeader('ADMIN'),
+    });
+    expect(abertos.json<{ itens: { id: string }[] }>().itens.some((a) => a.id === alertaId)).toBe(
+      false,
+    );
+  });
+});
+
+describe('GET /alertas — paginação por cursor avança de verdade (achado numa revisão)', () => {
+  it('não repete a mesma página — cada chamada com cursor devolve itens novos', async () => {
+    // listarAlertas ordenava desc(criadoEm) mas paginava com gt(id, cursor)
+    // — direção invertida, "carregar mais" nunca saía da primeira página.
+    for (let i = 0; i < 5; i++) {
+      const dispositivo = await criarDispositivo(db, {
+        amapiName: `enterprises/x/devices/paginacao-${i}`,
+        ativo: true,
+        complianceState: 'NON_COMPLIANT',
+      });
+      await verificarAlertasReativos(db, dispositivo);
+    }
+
+    const idsVistos = new Set<string>();
+    let cursor: string | undefined;
+    let paginas = 0;
+    do {
+      const url = cursor
+        ? `/alertas?tipo=NAO_CONFORME&aberto=true&limit=2&cursor=${cursor}`
+        : '/alertas?tipo=NAO_CONFORME&aberto=true&limit=2';
+      const response = await app.inject({ method: 'GET', url, headers: authHeader('ADMIN') });
+      const corpo = response.json<{ itens: { id: string }[]; proximoCursor: string | undefined }>();
+
+      for (const item of corpo.itens) {
+        expect(idsVistos.has(item.id)).toBe(false); // nunca um id repetido entre páginas
+        idsVistos.add(item.id);
+      }
+
+      cursor = corpo.proximoCursor;
+      paginas++;
+    } while (cursor && paginas < 10); // teto de segurança — nunca deveria chegar perto disso
+
+    expect(paginas).toBeGreaterThan(1); // prova que avançou de página de verdade
+    expect(idsVistos.size).toBeGreaterThanOrEqual(5);
+  });
 });
 
 describe('GET /dashboard', () => {

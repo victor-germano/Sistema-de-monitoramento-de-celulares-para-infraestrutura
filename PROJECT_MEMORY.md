@@ -105,11 +105,63 @@ Ver [`docs/DECISOES.md`](./docs/DECISOES.md) para os ADRs completos. Resumo:
 
 ## Estado atual
 
-**Camada de automação (pós-Fase 7): concluída.** CI (lint/format/typecheck/build/testes/
-deriva do openapi.json) no GitHub Actions, pre-commit hooks (husky+lint-staged),
-Dependabot, CodeQL, exportação Excel do dashboard e `render.yaml` como
-infraestrutura-como-código pro deploy real (Render pro backend, Vercel reservado pro
-frontend). Ver entrada datada abaixo para o detalhe completo.
+**Revisão completa do backend + rodada de eficiência (20 achados, 6 lotes): concluída e
+validada contra o GitHub real, "0 erros" confirmado.** Depois da revisão de 15 bugs
+(abaixo), o Victor perguntou especificamente sobre eficiência — resposta honesta: a
+revisão anterior tinha sido só de correção, e tinha 5 achados de eficiência/robustez
+deixados de lado de propósito (não eram bugs). Pedido explícito de resolver todos,
+"0 erros, nada deixado de lado". Lote 6 resolveu:
+
+**Lote 6 — Eficiência/robustez** — `GET /dashboard` com 10 queries sequenciais → paralelas
+(`Promise.all`); busca livre (`?busca=`) em 4 endpoints sem escapar `%`/`_` do ILIKE
+(helper compartilhado novo, `src/shared/sql-like.ts`); corrida real no token de
+enrollment (SELECT+checar+UPDATE não-atômico — corrigido com `UPDATE ... WHERE
+   usado_em IS NULL`, testado disparando a corrida de verdade via `Promise.allSettled`
+contra Postgres real); vazamento de 3 conexões Redis no shutdown do processo da API
+(nunca fechava a fila de política); 409 sistêmico pra qualquer violação de unicidade
+do Postgres (SQLSTATE 23505) no error handler global, fechando a janela de corrida
+check-then-insert residual pra matrícula/número/patrimônio de uma vez, não rota por
+rota. 321 testes (11 novos), CI e CodeQL verdes no commit `ffa31b0`.
+
+**Revisão completa do backend (15 bugs, 5 lotes): concluída e validada contra o GitHub
+real.** Pedido explícito do Victor antes de liberar o frontend ("a empresa tem mais de
+mil funcionários, precisa estar rodando liso") — revisão adversarial dedicada (não só
+"os testes passam") encontrou 15 bugs reais de correção/segurança que a suíte de 283
+testes da época não cobria. Corrigidos em 5 commits temáticos, cada um com teste novo
+que prova o bug E a correção, validado isoladamente antes do commit seguinte:
+
+1. **Segurança** — RBAC rodava depois da validação de schema (400 revelava campos de
+   rota protegida pra quem nem autenticou, em vez de 401); vazamento de senha no log
+   via erro bruto do googleapis.
+2. **Contrato de API** — `?ativo=false`/`?ativa=false`/`?aberto=false` faziam o
+   contrário do pedido (`z.coerce.boolean()`); paginação de `/alertas` nunca avançava
+   (cursor invertido); `valorMensal` de `/linhas` voltava como string, não número.
+3. **Motor de alertas** — app desinstalado nunca era detectado como ausente
+   (`dispositivo_apps` nunca apagava linha antiga); `APP_OBRIGATORIO_AUSENTE` nunca se
+   resolvia sozinho quando a política mudava ou o device era desvinculado.
+4. **Integridade com a AMAPI** — escrita de política + histórico de versão não eram
+   atômicos (sem transação); timeout do BullMQ perdia o resultado real do job (que
+   continua rodando) — agora reconcilia depois via `aposTimeout`; comando sem nome de
+   operação ficava "ENVIADO" pra sempre, sem erro visível.
+5. **Config/robustez** — primeiro ADMIN podia travar como VIEWER por maiúscula/
+   minúscula; config de domínio malformada podia zerar login da empresa sem erro no
+   boot; patrimônio duplicado quebrava com 500 em vez de 409; redelivery do Pub/Sub
+   nunca tentava reprocessar erro transitório; fuso do export Excel usava UTC.
+
+**Confirmado contra a infraestrutura real** (não assumido): depois do push final, o job
+`openapi-sincronizado` do CI pegou — pela segunda vez nesta jornada, exatamente como
+projetado — uma divergência real (o fix dos filtros booleanos mudou o schema de 3 query
+params, e o `openapi.json` não tinha sido regenerado). Corrigido num commit extra.
+Resultado final: **310 testes, CI e CodeQL verdes** no commit `90cf9b5`.
+
+**Camada de automação (pós-Fase 7): concluída, e já validada contra o GitHub real.**
+Primeiro push (histórico completo, o repositório remoto estava vazio desde a Fase 1) e
+primeira execução real do CI/CodeQL revelaram 3 bugs que só apareciam fora da máquina
+local (ver entrada "Diagnóstico pós-push" abaixo) — corrigidos e CI **verde** no commit
+`b5ed2b3`. CI (lint/format/typecheck/build/testes/deriva do openapi.json) no GitHub
+Actions, pre-commit hooks (husky+lint-staged), Dependabot, CodeQL, exportação Excel do
+dashboard e `render.yaml` como infraestrutura-como-código pro deploy real (Render pro
+backend, Vercel reservado pro frontend).
 
 **Fase 7 — Documentação de handoff: concluída.**
 
@@ -289,11 +341,18 @@ resolvidos ANTES de implementar, não depois (ADR-026/027/029/030).
 
 ## Próximo passo
 
-Camada de automação concluída. Fase 7 concluída — era a última fase da spec original. Não há próxima fase definida pela
-spec. Dois caminhos possíveis a partir daqui, nenhum iniciado:
+**Backend formalmente liberado pro frontend, "0 erros" confirmado** (2026-10-15) — 321
+testes, 20 achados reais corrigidos entre as duas revisões (15 de correção/segurança +
+5 de eficiência/robustez), não só "os testes passam". CI e CodeQL verdes contra o
+GitHub real, não só localmente — confirmado de novo depois de cada rodada. Fase 7
+concluída — era a última
+fase da spec original. Não há próxima fase definida pela spec. Dois caminhos possíveis
+a partir daqui:
 
 1. **Construção da interface** pelo time de frontend, usando `docs/HANDOFF-FRONTEND.md` +
    `docs/openapi.json` como ponto de partida (este repositório continua só-backend).
+   **Liberado para começar de verdade** — só falta decidir a stack do frontend
+   (provavelmente algo Vercel-nativo, ex. Next.js ou Vite+React).
 2. **Teste E2E real contra a AMAPI**, bloqueado pelas mesmas 3 pendências arquivadas desde
    a Fase 4/5 (nome real da enterprise AMAPI, tópico/subscription Pub/Sub, lista de
    filiais) — nenhuma resolvível pela equipe técnica sozinha, ver `docs/APRESENTACAO-GERENCIA.md`.
@@ -969,3 +1028,147 @@ trabalho, ambas documentadas, não ambas corrigidas (a segunda é pendência del
    `render.yaml` em texto plano.
 4. Pendências já listadas nas entradas anteriores (enterprise AMAPI real, Pub/Sub,
    filiais, construção do frontend) continuam de pé, inalteradas.
+
+---
+
+### 2026-10-15 — Primeiro push real e diagnóstico pós-GitHub
+
+**Solicitação original:** Victor pediu push pro GitHub ("de forma limpa e segura,
+automaticamente") e, depois, pra verificar se algo falhou no CI/CodeQL e corrigir
+automaticamente — pergunta final: isso já permite considerar o backend 100% pronto pro
+frontend.
+
+**Status:** Concluída.
+
+**O que foi descoberto:** o repositório remoto estava **vazio** desde a Fase 1
+(clonado vazio, nunca recebeu push em nenhuma fase anterior) — `git branch
+--unset-upstream` e "upstream is gone" eram sintoma disso, não de divergência. Primeiro
+`git push -u origin main` enviou todo o histórico de uma vez (10 commits).
+
+Sem `gh` CLI instalado — diagnóstico do Actions feito via API do GitHub direto
+(`git credential fill` pra extrair o token já configurado, nunca impresso em log/saída).
+3 falhas reais na primeira execução do CI/CodeQL contra a infraestrutura de verdade
+(nenhuma reproduzível localmente, por isso não apareceram antes):
+
+1. `npm run docs:openapi` usa `tsx --env-file=.env` — Node exige que o arquivo exista
+   mesmo com as variáveis já injetadas via `env:` do workflow (`node: .env: not found`).
+   Corrigido com `touch .env` antes do passo no CI.
+2. `npm run lint` (regras type-aware do `typescript-eslint`, `parserOptions.project`)
+   estourou o heap default do V8 no runner padrão (`JavaScript heap out of memory`) —
+   na máquina local funciona porque o Node ajusta o heap pela RAM disponível, no runner
+   não. Corrigido com `NODE_OPTIONS=--max-old-space-size=4096` no passo.
+3. CodeQL falhava com "Code scanning is not enabled for this repository" — o
+   repositório é **privado**, e essa integração nativa (aba Security) depende de uma
+   configuração nas Settings do GitHub que pode exigir plano pago; não é decisão
+   técnica pra tomar sozinho. Workaround aplicado: `upload: false` no
+   `codeql-action/analyze` + `actions/upload-artifact`, mantendo a análise rodando sem
+   depender dessa feature — documentado como pendência de decisão do Victor (habilitar
+   ou não depois, conferindo o custo nas próprias Settings do repositório).
+
+Depois de corrigir os 3, uma 4ª falha real apareceu (não um bug de infraestrutura, o
+job `openapi-sincronizado` funcionando exatamente como projetado): `docs/openapi.json`
+estava desatualizado de verdade — o commit da feature Excel (`89e6036`) adicionou
+`GET /dashboard/export` mas ninguém rodou `npm run docs:openapi` de novo antes de
+commitar. Regenerado e commitado separadamente.
+
+**Status final confirmado contra o GitHub real** (não assumido): CI e CodeQL
+`conclusion=success` no commit `b5ed2b3` (consultado via API até `status=completed` nos
+dois, não só "deu push e assumi que passou").
+
+**Arquivos alterados:** `.github/workflows/ci.yml` (fix `.env`/heap), `.github/workflows/codeql.yml`
+(workaround de upload), `docs/openapi.json` (regenerado), este arquivo. 3 commits
+(`da6c953`, `b5ed2b3`, e este) além do push inicial.
+
+**Decisões técnicas tomadas:** workaround do CodeQL (`upload: false` em vez de exigir
+"Code scanning" habilitado) — decisão técnica reversível a qualquer momento; não decide
+pelo Victor se vale habilitar a feature paga/nativa.
+
+**Pendências futuras:**
+
+1. **Habilitar "Code scanning" nas Settings do repositório** (opcional, decisão do
+   Victor) — conferir custo real pra repositório privado antes; sem isso, resultado do
+   CodeQL só fica disponível como artefato do workflow, não na aba Security.
+2. **7 PRs do Dependabot já abertos** (consequência esperada de ativar o
+   `dependabot.yml`) — nenhum urgente, cada um passa pelo mesmo CI antes de poder ser
+   mergeado; revisar quando conveniente.
+3. Pendências já listadas nas entradas anteriores inalteradas (upgrade de
+   `drizzle-orm`/breaking changes, validação do `render.yaml` contra conta real,
+   enterprise AMAPI/Pub/Sub/filiais, construção do frontend).
+
+**Resposta à pergunta do Victor ("posso considerar o backend 100%?"):** sim, do ponto
+de vista de **qualidade de código e pipeline** — testado (283/283), com CI/CodeQL
+verdes contra a infraestrutura real, não só localmente. **Não 100%** do ponto de vista
+de **produto em produção**: as 3 pendências de negócio (enterprise AMAPI, Pub/Sub,
+filiais) continuam bloqueando o primeiro teste E2E real contra um device físico — mas
+nenhuma delas bloqueia começar o frontend, que consome a API já estável e documentada
+(`docs/openapi.json`/`HANDOFF-FRONTEND.md`).
+
+---
+
+### 2026-10-15 — Upgrade do drizzle-orm (fecha a pendência de SQL injection)
+
+**Solicitação original:** Victor pediu pra resolver a pendência deliberada do
+`drizzle-orm` (vulnerabilidade real de SQL injection, documentada desde a Fase 7),
+depois de uma sessão inteira completando as telas do frontend (comandos, políticas,
+colaboradores/linhas, alertas, gestão de usuários).
+
+**Status:** Concluída.
+
+`drizzle-orm` `0.38.4` → `0.45.4` — corrige
+[GHSA-gpj5-g38j-94v9](https://github.com/advisories/GHSA-gpj5-g38j-94v9) ("SQL
+injection via identificador mal escapado", fixado na 0.45.2). `npm audit` confirma:
+zero vulnerabilidades restantes pra `drizzle-orm`.
+
+**Achado real durante o upgrade (não só por changelog — confirmado empiricamente
+contra o Postgres de verdade antes E depois):** a partir da 0.44.0, todo erro vindo do
+driver passa a vir embrulhado num `DrizzleQueryError` — o `PostgresError` original
+(com o `.code` SQLSTATE que `errorHandler` usa pra decidir o 409 de "registro
+duplicado") passa a viver em `.cause`, não mais direto no erro. Sem ajustar, a defesa
+sistêmica contra violação de unicidade (`ehViolacaoDeUnicidade` em
+`src/shared/problem-details.ts`) pararia de funcionar silenciosamente — toda
+duplicata que escapasse do check prévio da rota cairia num 500 genérico em vez do 409
+esperado, sem nenhum teste existente pra pegar isso (os testes de 409 das rotas
+testam o check prévio explícito, não o catch-all do `errorHandler`).
+
+Processo usado pra achar isso com confiança, não só confiar no changelog:
+
+1. Script descartável inserindo a mesma matrícula duas vezes contra o Postgres real
+   (`scripts/_check-erro-unicidade.ts`, nunca commitado) — rodado ANTES do upgrade
+   pra confirmar a forma atual do erro (`PostgresError` direto, `.code` acessível).
+2. `npm install drizzle-orm@0.45.4`.
+3. Mesmo script de novo — confirmou a forma nova (`DrizzleQueryError`, `.code` só via
+   `.cause.code`).
+4. Corrigido `codigoPostgres()` em `problem-details.ts` pra olhar os dois níveis
+   (funciona com ou sem o wrapper, não presume qual versão do driver está rodando).
+5. Teste de regressão novo em `test/unit/problem-details.test.ts` cobrindo o formato
+   embrulhado.
+
+Nenhuma outra mudança de breaking change das versões 0.39–0.44 nos afeta: sem colunas
+`array` (afetadas pela 0.41), sem uso de `.free()`/`.prepare(` manual, sem rotas MySQL
+(a remoção de `.fullJoin()` da 0.43 é só MySQL). `db.query.politicas.findFirst` (RQB
+v1, usado em 2 lugares) continua funcionando — a remoção do RQB v1 só acontece na
+1.0.0-rc.1, bem além do alvo desta atualização.
+
+**Status final confirmado:** typecheck limpo, lint limpo, suíte completa
+**328/328** (327 + o teste novo), `docs/openapi.json` sem drift (nenhuma rota/schema
+mudou, só o `errorHandler` interno).
+
+**Decisão deliberada:** só o `drizzle-orm` foi atualizado nesta entrada.
+`drizzle-kit` (dev-only, fix disponível na 0.31.11) e as 3 vulnerabilidades
+`critical` do `vitest`/`tinypool`/`@vitest/coverage-v8` (reportadas pelo mesmo
+`npm audit`, mas pré-existentes e sem relação com o `drizzle-orm`) ficam de fora do
+escopo desta sessão — nenhuma delas é a pendência que o Victor pediu pra resolver.
+
+**Arquivos alterados:** `package.json`/`package-lock.json` (upgrade),
+`src/shared/problem-details.ts` (fix do `.cause`), `test/unit/problem-details.test.ts`
+(teste de regressão), este arquivo.
+
+**Pendências futuras:**
+
+1. `drizzle-kit` ainda em `0.30.6` (fix disponível, `0.31.11`, major) — avaliar
+   separadamente, é dependência de dev (migrations/studio), não roda em produção.
+2. Vulnerabilidades `critical` em `vitest`/`tinypool`/`@vitest/coverage-v8` —
+   pré-existentes, não introduzidas por este upgrade, fora do escopo desta entrada.
+3. Pendências já listadas nas entradas anteriores inalteradas (validação do
+   `render.yaml` contra conta real, enterprise AMAPI/Pub/Sub/filiais, 7 PRs do
+   Dependabot, decisão sobre Code Scanning nativo).
