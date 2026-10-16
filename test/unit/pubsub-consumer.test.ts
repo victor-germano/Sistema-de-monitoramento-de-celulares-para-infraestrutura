@@ -51,7 +51,14 @@ const {
 });
 
 vi.mock('@google-cloud/pubsub', () => ({
-  PubSub: vi.fn().mockImplementation(() => ({ subscription: pubsubSubscriptionMock })),
+  // Função nomeada, não arrow: a partir do vitest 5, `new PubSub(...)` invoca
+  // a implementação do mock via `new` de verdade — um arrow function não é
+  // "constructible" em JS puro e quebra com "is not a constructor". Função
+  // normal retornando um objeto funciona porque `new` usa o valor de retorno
+  // no lugar de `this` quando o retorno é um objeto.
+  PubSub: vi.fn().mockImplementation(function PubSubMock() {
+    return { subscription: pubsubSubscriptionMock };
+  }),
 }));
 vi.mock('../../src/db/client.ts', () => ({ db: { insert: dbInsertMock, select: dbSelectMock } }));
 vi.mock('../../src/domain/eventos/processar-evento.ts', () => ({

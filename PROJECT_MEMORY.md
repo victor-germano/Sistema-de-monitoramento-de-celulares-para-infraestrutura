@@ -1172,3 +1172,99 @@ escopo desta sessão — nenhuma delas é a pendência que o Victor pediu pra re
 3. Pendências já listadas nas entradas anteriores inalteradas (validação do
    `render.yaml` contra conta real, enterprise AMAPI/Pub/Sub/filiais, 7 PRs do
    Dependabot, decisão sobre Code Scanning nativo).
+
+---
+
+### 2026-10-16 — Revisão e fechamento dos 15 PRs do Dependabot
+
+**Solicitação original:** retomar a revisão dos PRs do Dependabot (sessão anterior bateu
+o limite diário no meio dela) e, depois, deixar o backend o mais perto possível de
+"100%" antes do frontend ser considerado pronto pra apresentar.
+
+**Status:** Concluída (10 de 15 PRs fechados; 4 permanecem abertos por motivo legítimo
+documentado abaixo; 1 — o upgrade do vitest — foi feito manualmente fora do fluxo do PR).
+
+**Diagnóstico inicial:** todos os 15 PRs apareciam com CI falho. Causa raiz: todos foram
+abertos contra um commit ~15 à frente atrás do `main` (antes de toda a sessão anterior) e
+nunca foram atualizados — CI rodando contra código desatualizado, não um problema real
+das dependências. Atualizar cada branch contra o `main` resolveu 9 dos 15 na hora.
+
+**10 PRs seguros, mergeados** (squash, via API do GitHub — `gh` CLI não instalado, token
+extraído com `git credential fill`, nunca logado): #1 (`actions/checkout`), #2
+(`codeql-action`), #3 (`actions/setup-node`), #5 (grupo `dependencias-dev`), #7
+(`@fastify/rate-limit`), #9 (`jose`), #11 (`dotenv`), #13 (`@fastify/swagger-ui`), #14
+(`actions/upload-artifact`), #15 (grupo `dependencias-producao` — precisou regenerar
+`docs/openapi.json` porque o `@fastify/swagger` da própria atualização mudou o formato
+de `nullable` do OpenAPI 3.0 pro 3.1). Dois merges (#3 e #15) tiveram conflito real em
+`package.json`/lockfile contra merges anteriores — resolvidos manualmente, suíte completa
+revalidada antes de cada merge final.
+
+**4 PRs continuam abertos, de propósito — bloqueios reais de ecossistema, não
+preguiça nem falta de tempo:**
+
+- **#6** `fastify-type-provider-zod` 4→7: exige `zod >= 4`, o projeto usa `zod ^3.24.1`
+  em centenas de rotas. Migrar pra Zod v4 é um projeto à parte (breaking changes na
+  própria API de schema), não cabe num PR de dependência isolado.
+- **#12** `typescript` 5→7: `typescript-eslint` (`^8.71.2`) ainda trava em
+  `typescript <6.1.0` — o ecossistema de lint não suporta TS7 ainda. Reavaliar quando
+  `typescript-eslint` liberar suporte.
+- **#8**/**#10** `@vitest/coverage-v8` e `vitest` 2→5: tecnicamente resolvidos (ver
+  entrada abaixo), mas feito **manualmente direto no `main`**, não via merge dos PRs —
+  o Dependabot vai fechar essas duas sozinho na próxima varredura (ou fechar
+  manualmente com comentário, se ele não perceber).
+
+**Arquivos alterados:** só os dos PRs mergeados (ver cada um no histórico do GitHub) +
+este arquivo.
+
+---
+
+### 2026-10-16 — Upgrade vitest 2→5 e coverage-v8 2→5 (zera as 3 vulnerabilidades `critical` restantes)
+
+**Solicitação original:** parte do mesmo pedido acima ("deixar o backend o mais perto
+possível de 100%") — fecha a pendência que a entrada do upgrade do `drizzle-orm`
+(2026-10-15) tinha deixado deliberadamente de fora.
+
+**Status:** Concluída.
+
+`vitest` `2.1.9` → `5.0.5`, `@vitest/coverage-v8` `2.1.9` → `5.0.5` (par exato — a
+`5.0.5` do `coverage-v8` declara `peerDependencies.vitest: "5.0.5"` exato, não um range;
+tentar instalar os dois em comandos separados ou com lockfile desatualizado quebra a
+resolução do npm com `ERESOLVE`, foi preciso apagar `node_modules`/`package-lock.json` e
+reinstalar do zero com os dois já pinados na mesma versão). Zera as 3 vulnerabilidades
+`critical` que restavam no `npm audit` (`vitest`, `tinypool`, `@vitest/coverage-v8`) —
+iam de `<=4.1.10`/`<=2.1.1`/`<=3.2.5`.
+
+**Breaking change real encontrado (não só suposição — a suíte completa pegou sozinha):**
+o mock de `@google-cloud/pubsub` em `test/unit/pubsub-consumer.test.ts` instanciava
+`PubSub` como `vi.fn().mockImplementation(() => ({ subscription: ... }))` — uma arrow
+function. A partir do vitest 5, `new PubSub(...)` passou a invocar a implementação do
+mock via `new` de verdade (antes, o resultado da chamada normal era usado como a
+instância). Arrow function não é "constructible" em JS puro — `new (() => {})()` lança
+`TypeError: ... is not a constructor`. Trocado para `function PubSubMock() { return
+{...} }` (função nomeada — `new` em cima de uma função normal que retorna um objeto usa
+esse objeto como instância, comportamento padrão de JS, não um truque do vitest). Único
+lugar no repo com esse padrão (confirmado via grep em `test/unit` e `test/integration`
+por `mockImplementation(() =>` combinado com `vi.mock`) — nenhum outro mock de
+"classe"/constructor foi afetado.
+
+**Processo de validação:** typecheck limpo, lint limpo, suíte completa rodada **duas
+vezes** (antes do fix, pegando os 11 testes falhos; depois do fix, 328/328 limpo) — não
+assumido só pelo arquivo isolado passar.
+
+**Status final confirmado:** `npm audit` — 0 crítico (eram 3), restam 12 (10 moderate, 2
+high), todas em dependências de **dev/teste** (`testcontainers`, `dockerode`,
+`drizzle-kit`, `exceljs`, `esbuild`/`@esbuild-kit`) — nenhuma roda em produção.
+
+**Arquivos alterados:** `package.json`/`package-lock.json` (upgrade),
+`test/unit/pubsub-consumer.test.ts` (fix do mock), este arquivo.
+
+**Pendências futuras:**
+
+1. Os PRs #8/#10 do Dependabot vão ficar "obsoletos" no GitHub (o upgrade já foi feito
+   manualmente) — fechar com comentário na próxima vez que estiver na aba de PRs, não
+   é urgente.
+2. `drizzle-kit` ainda em `0.30.6` (pendência já registrada, fora do escopo aqui).
+3. 12 vulnerabilidades moderate/high restantes, todas dev-only — avaliar separado,
+   nenhuma bloqueia produção.
+4. Pendências de negócio inalteradas (enterprise AMAPI, Pub/Sub, filiais) — continuam
+   sendo o único bloqueio real pro primeiro teste E2E contra um device físico.
