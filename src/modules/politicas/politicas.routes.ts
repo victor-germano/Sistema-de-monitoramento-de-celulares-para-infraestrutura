@@ -4,7 +4,7 @@
 // (nunca `salvarPolitica` direto) — é isso que garante concorrência 1 de
 // verdade contra a AMAPI, mesmo com vários processos de API atrás de um
 // load balancer.
-import { and, desc, eq, ilike } from 'drizzle-orm';
+import { and, desc, eq, gt, ilike } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -50,6 +50,8 @@ const rollbackBodySchema = z.object({ versao: z.coerce.number().int().positive()
 const listarQuerySchema = z.object({
   busca: z.string().optional(),
   ativa: zQueryBoolean.optional(),
+  limit: z.coerce.number().int().positive().max(100).optional(),
+  cursor: z.string().uuid().optional(),
 });
 
 const ROLES_LEITURA = ['VIEWER', 'TECNICO', 'ADMIN'] as const;
@@ -236,19 +238,36 @@ export function registerPoliticaRoutes(app: FastifyInstance): void {
     '/policies',
     { ...withRole(...ROLES_LEITURA), schema: { querystring: listarQuerySchema } },
     async (request, reply) => {
+      const limit = Math.min(Math.max(request.query.limit ?? 25, 1), 100);
+
       const condicoes = [];
       if (request.query.busca) {
         condicoes.push(ilike(politicas.nome, `%${escaparTermoBusca(request.query.busca)}%`));
       }
       if (request.query.ativa !== undefined)
         condicoes.push(eq(politicas.ativa, request.query.ativa));
+      if (request.query.cursor) condicoes.push(gt(politicas.id, request.query.cursor));
 
+      // Ordena por `id` (UUID v7 = ordem de criação), não mais por `nome` —
+      // mesmo padrão de cursor dos outros módulos (devices/colaboradores/
+      // linhas/alertas, todos paginam por `id`). Paginar mantendo a ordem
+      // alfabética exigiria um cursor composto (nome, id) que nenhuma outra
+      // rota deste backend usa — trocar a ordem de exibição é a mudança
+      // mais simples e consistente, numa lista que hoje é pequena.
       const linhas = await db
         .select()
         .from(politicas)
         .where(condicoes.length > 0 ? and(...condicoes) : undefined)
-        .orderBy(politicas.nome);
-      return reply.send(linhas);
+        .orderBy(politicas.id)
+        .limit(limit + 1);
+
+      const temMais = linhas.length > limit;
+      const pagina = temMais ? linhas.slice(0, limit) : linhas;
+
+      return reply.send({
+        itens: pagina,
+        proximoCursor: temMais ? pagina[pagina.length - 1]?.id : undefined,
+      });
     },
   );
 

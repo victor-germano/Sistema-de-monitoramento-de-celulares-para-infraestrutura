@@ -27,7 +27,11 @@ versões. Toda escrita (`POST`/`PATCH`/rollback) passa pelos mesmos três passos
 
 ### `GET /policies`
 
-Lista todas (filtros opcionais: `busca` por nome, `ativa` true/false).
+Paginado por cursor (`itens`/`proximoCursor`, `limit`/`cursor` — mesmo padrão de
+`docs/HANDOFF-FRONTEND.md` seção 3), filtros opcionais: `busca` por nome, `ativa`
+true/false. Ordenado por `id` (ordem de criação), não mais por `nome` — fechado
+numa sessão posterior à Fase 5, pra bater com o padrão de cursor que toda outra
+lista já seguia.
 
 ### `GET /policies/:id`
 

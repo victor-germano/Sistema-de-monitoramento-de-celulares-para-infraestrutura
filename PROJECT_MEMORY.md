@@ -1447,3 +1447,40 @@ severidade).
 3. Teste de ponta a ponta de verdade contra a AMAPI segue bloqueado pela mesma pendência de
    sempre (enterprise real, Pub/Sub, `AMAPI_SERVICE_ACCOUNT_KEY_PATH`) — a rota nova já foi
    confirmada funcionando corretamente nesse caminho de erro esperado.
+
+---
+
+### 2026-10-16/17 — 7 melhorias do painel (plano aprovado), 2 mudanças de backend
+
+**Solicitação original:** depois da revisão de UX completa do painel (entrada anterior),
+Victor aprovou um plano de 7 melhorias de alto impacto — a maioria só frontend, mas duas
+exigiam backend: `PATCH /usuarios/:id` aceitar `ativo` (entrada anterior, ADR-032) e
+`GET /policies` ganhar paginação por cursor.
+
+**Status:** Concluída (as duas mudanças de backend; as 5 restantes são só no painel).
+
+**`GET /policies` agora paginado** (`src/modules/politicas/politicas.routes.ts`) — era a
+**única** rota de listagem do backend sem o padrão cursor/`Pagina<T>` que
+`docs/HANDOFF-FRONTEND.md` seção 3 já afirmava ser universal (afirmação que, até agora,
+era falsa pra esta rota especificamente). `limit`/`cursor` adicionados ao
+`listarQuerySchema`, resposta virou `{ itens, proximoCursor }`. **Mudança de contrato**
+(array → objeto) — 2 consumidores no painel atualizados na mesma leva (`policies/page.tsx`,
+`devices/novo/page.tsx`). Ordenação mudou de `nome` (alfabética) pra `id` (ordem de
+criação) — mesmo padrão de cursor simples que `devices`/`colaboradores`/`linhas`/`alertas`
+já usam; paginar mantendo ordem alfabética exigiria cursor composto (nome, id) que nenhuma
+outra rota deste backend usa, e a lista de políticas é pequena o bastante pra essa troca de
+ordenação não doer.
+
+**Validação:** suíte completa rodada duas vezes — a primeira rodada achou 1 falha real,
+mas não no código novo: um teste já existente (`rbac.test.ts`, documentado na entrada
+anterior) deixava um segundo ADMIN permanente no banco, o que mascarava a trava do
+`ativo`. Corrigido e revalidado: **343/343** na segunda rodada completa.
+
+**Arquivos alterados:** `src/modules/politicas/politicas.routes.ts`,
+`test/integration/politicas-routes.test.ts` (+ teste de paginação novo),
+`docs/api/politicas.md`, `docs/openapi.json` (41 rotas inalteradas, só o schema de
+resposta de `GET /policies` muda), este arquivo.
+
+**Pendências futuras:** as 5 melhorias restantes do plano (toast, confirmação
+padronizada, edição de dispositivo, dashboard clicável, páginas de erro/404) vivem só no
+repositório do painel — ver o `PROJECT_MEMORY`/histórico de commits de lá.

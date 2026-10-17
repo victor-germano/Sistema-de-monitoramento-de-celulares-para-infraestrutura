@@ -370,13 +370,45 @@ describe('GET /policies', () => {
       url: '/policies?ativa=false',
       headers: authHeader('ADMIN'),
     });
-    expect(inativas.json<{ id: string }[]>().some((p) => p.id === id)).toBe(true);
+    expect(inativas.json<{ itens: { id: string }[] }>().itens.some((p) => p.id === id)).toBe(true);
 
     const ativas = await app.inject({
       method: 'GET',
       url: '/policies?ativa=true',
       headers: authHeader('ADMIN'),
     });
-    expect(ativas.json<{ id: string }[]>().some((p) => p.id === id)).toBe(false);
+    expect(ativas.json<{ itens: { id: string }[] }>().itens.some((p) => p.id === id)).toBe(false);
+  });
+
+  it('pagina com cursor/limit, mesmo padrão dos outros módulos', async () => {
+    for (let i = 0; i < 3; i++) {
+      await app.inject({
+        method: 'POST',
+        url: '/policies',
+        headers: authHeader('ADMIN'),
+        payload: { nome: `pra-paginacao-${i}-${Date.now()}`, payload: {} },
+      });
+    }
+
+    const primeiraPagina = await app.inject({
+      method: 'GET',
+      url: '/policies?limit=2',
+      headers: authHeader('ADMIN'),
+    });
+    expect(primeiraPagina.statusCode).toBe(200);
+    const corpo = primeiraPagina.json<{ itens: unknown[]; proximoCursor?: string }>();
+    expect(corpo.itens).toHaveLength(2);
+    expect(corpo.proximoCursor).toBeDefined();
+
+    const segundaPagina = await app.inject({
+      method: 'GET',
+      url: `/policies?limit=2&cursor=${corpo.proximoCursor}`,
+      headers: authHeader('ADMIN'),
+    });
+    expect(segundaPagina.statusCode).toBe(200);
+    const corpo2 = segundaPagina.json<{ itens: { id: string }[] }>();
+    // Nenhum item da segunda página repete a primeira — cursor avançou de verdade.
+    const idsPrimeira = new Set((corpo.itens as { id: string }[]).map((p) => p.id));
+    expect(corpo2.itens.every((p) => !idsPrimeira.has(p.id))).toBe(true);
   });
 });

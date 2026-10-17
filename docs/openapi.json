@@ -115,11 +115,11 @@
                       "ADMIN",
                       "AUDITOR"
                     ]
+                  },
+                  "ativo": {
+                    "type": "boolean"
                   }
                 },
-                "required": [
-                  "role"
-                ],
                 "additionalProperties": false
               }
             }
@@ -665,6 +665,26 @@
             },
             "in": "query",
             "name": "ativa",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": true,
+              "minimum": 0,
+              "maximum": 100
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "query",
+            "name": "cursor",
             "required": false
           }
         ],
