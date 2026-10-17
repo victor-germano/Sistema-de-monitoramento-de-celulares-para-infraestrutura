@@ -18,7 +18,7 @@ import {
 } from '../../domain/auth/refresh-tokens.ts';
 import { PERMISSOES_POR_ROLE } from '../../domain/auth/permissions.ts';
 import {
-  atualizarRole,
+  atualizarUsuario,
   atualizarUltimoLogin,
   buscarUsuarioPorId,
   buscarUsuarioPorOidcSubject,
@@ -321,44 +321,66 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       ...withRole('ADMIN'),
       schema: {
         params: patchUsuarioParamsSchema,
-        body: z.object({ role: z.enum(['VIEWER', 'TECNICO', 'ADMIN', 'AUDITOR']) }),
+        body: z.object({
+          role: z.enum(['VIEWER', 'TECNICO', 'ADMIN', 'AUDITOR']).optional(),
+          ativo: z.boolean().optional(),
+        }),
       },
     },
     async (request, reply) => {
+      const { role, ativo } = request.body;
+      if (role === undefined && ativo === undefined) {
+        return sendProblem(
+          reply,
+          422,
+          'Nada para atualizar',
+          'Informe pelo menos um de: role, ativo.',
+        );
+      }
+
       const alvo = await buscarUsuarioPorId(request.params.id);
       if (!alvo) {
         return sendProblem(reply, 404, 'Usuário não encontrado', undefined);
       }
 
-      // Salvaguarda cirúrgica (pendência registrada em ADR-011): rebaixar o
-      // ÚLTIMO ADMIN ativo deixaria o sistema sem ninguém capaz de gerenciar
-      // usuários/roles — inclusive sem como reverter o próprio rebaixamento.
-      // Só verifica quando a mudança de fato tira o ADMIN de alguém que já é
-      // o único; promover ou manter ADMIN nunca cai aqui.
+      // Salvaguarda cirúrgica (pendência registrada em ADR-011): rebaixar OU
+      // DESATIVAR o ÚLTIMO ADMIN ativo deixaria o sistema sem ninguém capaz
+      // de gerenciar usuários/roles — inclusive sem como reverter a própria
+      // ação. Só verifica quando a mudança de fato tira o ADMIN de alguém
+      // que já é o único; promover, manter ADMIN, ou ativar nunca cai aqui.
+      const vaiRebaixar = role !== undefined && role !== 'ADMIN';
+      const vaiDesativar = ativo === false;
       if (
         alvo.role === 'ADMIN' &&
-        request.body.role !== 'ADMIN' &&
+        (vaiRebaixar || vaiDesativar) &&
         (await contarAdminsAtivos()) <= 1
       ) {
         return sendProblem(
           reply,
           422,
           'Não é possível remover o último ADMIN',
-          'Promova outro usuário a ADMIN antes de rebaixar este.',
+          'Promova outro usuário a ADMIN e/ou mantenha este ativo antes.',
         );
       }
 
-      const usuarioAtualizado = await atualizarRole(alvo.id, request.body.role);
+      const dadosAtualizacao: { role?: typeof role; ativo?: boolean } = {};
+      if (role !== undefined) dadosAtualizacao.role = role;
+      if (ativo !== undefined) dadosAtualizacao.ativo = ativo;
+
+      const usuarioAtualizado = await atualizarUsuario(alvo.id, dadosAtualizacao);
       if (!usuarioAtualizado) {
         return sendProblem(reply, 404, 'Usuário não encontrado', undefined);
       }
 
       await registrarAuditoria(db, {
         ator: { id: request.user!.sub, email: request.user!.email },
-        acao: 'USUARIO_ROLE_ALTERADA',
+        acao: role !== undefined ? 'USUARIO_ROLE_ALTERADA' : 'USUARIO_ATIVO_ALTERADO',
         entidade: 'usuario',
         entidadeId: usuarioAtualizado.id,
-        detalhes: { novaRole: request.body.role },
+        detalhes: {
+          ...(role !== undefined && { novaRole: role }),
+          ...(ativo !== undefined && { novoAtivo: ativo }),
+        },
         ip: request.ip,
         userAgent: request.headers['user-agent'],
       });

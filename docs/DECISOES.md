@@ -734,3 +734,24 @@ periódico, não um limiar de alerta em si).
 atuais são palpites informados, não medição da operação real da empresa — revisar assim que
 houver dado real de uso (quantos alertas cada limiar gera por semana, se está barulhento
 demais ou silencioso demais).
+
+---
+
+## ADR-032 — `PATCH /usuarios/:id` ganha `ativo`, reaproveitando a trava do último ADMIN
+
+**Contexto:** revisão de UX do painel (sessão de 16/10) achou que não existia nenhuma forma
+de desligar o acesso de um usuário que saiu da empresa — `usuarios.ativo` já bloqueava
+login/refresh (`provisionarUsuario`/`POST /auth/refresh`) desde sempre, mas nada na API
+conseguia setá-lo como `false` depois da criação.
+
+**Decisão:** `PATCH /usuarios/:id` passa a aceitar `role` e/ou `ativo`, os dois opcionais
+(pelo menos um obrigatório — 422 "Nada para atualizar" se nenhum vier). A trava do ADR-013
+("não remover o último ADMIN") é generalizada: bloqueia tanto rebaixar quanto **desativar**
+o único ADMIN ativo, mesma chamada a `contarAdminsAtivos()`. `atualizarRole` virou
+`atualizarUsuario(id, { role?, ativo? })` em `src/domain/usuarios/repositorio.ts` — um só
+`UPDATE`, o chamador decide quais campos entram.
+
+**Consequência:** nenhuma mudança no fluxo de login/refresh em si (já checava `ativo`) — só
+a rota de gestão ganhou a capacidade que faltava. Auditoria registra `USUARIO_ATIVO_ALTERADO`
+separado de `USUARIO_ROLE_ALTERADA` (a UI do painel só manda um campo por vez, nunca os
+dois). Testado em `test/integration/rbac.test.ts`.

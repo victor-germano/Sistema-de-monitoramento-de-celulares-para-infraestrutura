@@ -173,9 +173,54 @@ describe('PATCH /usuarios/:id — proteção do último ADMIN (ADR-013)', () => 
     });
     expect(response.statusCode).toBe(200);
 
-    // Devolve o sistema ao estado anterior (um único ADMIN ativo) pra não
-    // interferir nos outros testes deste arquivo que rodam depois.
-    await db.update(usuarios).set({ role: 'ADMIN' }).where(eq(usuarios.id, segundoAdmin.id));
+    // Devolve o sistema ao estado anterior (um único ADMIN ativo) — achado
+    // rodando a suíte de verdade: só reverter a role pra ADMIN NÃO restaura
+    // "um único ADMIN", cria um segundo ADMIN permanente pro resto da
+    // suíte (o `UPDATE` de volta pra ADMIN mantinha a linha viva). Apagar a
+    // linha é o que de fato devolve `contarAdminsAtivos()` a 1.
+    await db.delete(usuarios).where(eq(usuarios.id, segundoAdmin.id));
+  });
+
+  it('body vazio ({}) — 422, nada pra atualizar', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/usuarios/${usuarioIdsPorPapel.get('VIEWER')}`,
+      headers: authHeader('ADMIN'),
+      payload: {},
+    });
+    expect(response.statusCode).toBe(422);
+  });
+
+  it('recusa com 422 desativar o único ADMIN ativo (mesma trava do rebaixamento)', async () => {
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/usuarios/${usuarioIdsPorPapel.get('ADMIN')}`,
+      headers: authHeader('ADMIN'),
+      payload: { ativo: false },
+    });
+    expect(response.statusCode).toBe(422);
+  });
+
+  it('permite desativar/reativar um usuário comum (VIEWER)', async () => {
+    const id = usuarioIdsPorPapel.get('VIEWER')!;
+
+    const desativar = await app.inject({
+      method: 'PATCH',
+      url: `/usuarios/${id}`,
+      headers: authHeader('ADMIN'),
+      payload: { ativo: false },
+    });
+    expect(desativar.statusCode).toBe(200);
+    expect(desativar.json<{ ativo: boolean }>().ativo).toBe(false);
+
+    const reativar = await app.inject({
+      method: 'PATCH',
+      url: `/usuarios/${id}`,
+      headers: authHeader('ADMIN'),
+      payload: { ativo: true },
+    });
+    expect(reativar.statusCode).toBe(200);
+    expect(reativar.json<{ ativo: boolean }>().ativo).toBe(true);
   });
 });
 

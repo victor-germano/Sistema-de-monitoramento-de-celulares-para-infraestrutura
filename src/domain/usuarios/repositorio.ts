@@ -82,10 +82,20 @@ export async function contarAdminsAtivos(): Promise<number> {
   return admins.length;
 }
 
-export async function atualizarRole(usuarioId: string, role: Role): Promise<Usuario | undefined> {
+/**
+ * Generalizada pra `role` e/ou `ativo` (antes só `atualizarRole`) — mesmo
+ * `UPDATE`, só que o chamador decide quais campos entram no `.set()`,
+ * passando um objeto já "esparso" (sem a chave quando o campo não muda, não
+ * `undefined` explícito — `.set()` do Drizzle não filtra `undefined`
+ * sozinho).
+ */
+export async function atualizarUsuario(
+  usuarioId: string,
+  dados: { role?: Role; ativo?: boolean },
+): Promise<Usuario | undefined> {
   const [usuario] = await db
     .update(usuarios)
-    .set({ role })
+    .set(dados)
     .where(eq(usuarios.id, usuarioId))
     .returning();
   return usuario;
