@@ -157,9 +157,9 @@ completo (o que cada `notificationType` faz, idempotência, recuperação de fal
 
 ### 4. Primeiro enrollment de teste
 
-1. Com API e worker de pé, crie um enrollment token (`POST /enrollment/tokens` — seção 10,
-   ainda não implementado nesta fase; até lá, inserir manualmente uma linha em
-   `enrollment_tokens` com um `politicaId` válido serve pro teste).
+1. Com API e worker de pé, crie um enrollment token: `POST /enrollment/tokens` (`TECNICO+`,
+   body `{ politicaId, patrimonio?, colaboradorId? }`) — rota real desde a Fase 7.5, ver
+   `docs/HANDOFF-FRONTEND.md`.
 2. Gere o QR code / link a partir do token retornado pela AMAPI (`criarEnrollmentToken`,
    `src/integrations/amapi/enrollment.ts`) e escaneie num device Android físico ou emulador
    com Google Play Services.

@@ -25,6 +25,7 @@ import { registerColaboradorRoutes } from './modules/colaboradores/colaboradores
 import { registerLinhaRoutes } from './modules/linhas/linhas.routes.ts';
 import { registerAlertaRoutes } from './modules/alertas/alertas.routes.ts';
 import { registerDashboardRoutes } from './modules/dashboard/dashboard.routes.ts';
+import { registerEnrollmentRoutes } from './modules/enrollment/enrollment.routes.ts';
 
 // Fábrica em vez de instância no módulo top-level: os testes de integração
 // precisam construir a app DEPOIS de setar as env vars dos containers do
@@ -87,6 +88,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   registerLinhaRoutes(app);
   registerAlertaRoutes(app);
   registerDashboardRoutes(app);
+  registerEnrollmentRoutes(app);
 
   return app;
 }

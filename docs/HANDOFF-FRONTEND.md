@@ -210,14 +210,30 @@ CRUD simples e direto — `GET`/`POST`/`PATCH /colaboradores`, `GET`/`POST`/`PAT
 Sem particularidade além de `TECNICO+` ser o mínimo pra escrever (`VIEWER` só lê,
 `AUDITOR` não acessa nenhum dos dois).
 
+### Enrollment — "adicionar um dispositivo novo" (QR code)
+
+Fechado nesta sessão — antes era um gap documentado, agora é uma rota de verdade:
+
+- `POST /enrollment/tokens` (`TECNICO+`) — body `{ politicaId, patrimonio?,
+colaboradorId? }`. Devolve a linha criada **mais `valor` e `qrCode` em texto puro —
+  só nesta resposta, uma única vez**: nenhuma chamada posterior consegue recuperar
+  esse conteúdo (mesma regra do refresh token, só o hash fica persistido). Se a tela
+  perder o valor sem o técnico copiar, a única saída é revogar e criar outro.
+  `qrCode` é a string JSON que vira o conteúdo do QR code (a tela não recebe uma
+  imagem pronta — hoje o `HANDOFF-FRONTEND` deste gap foi fechado sem adicionar
+  dependência de geração de QR no frontend; se quiser renderizar a imagem de verdade,
+  precisa de uma biblioteca cliente tipo `qrcode`, não incluída ainda).
+- `GET /enrollment/tokens` (qualquer papel autenticado) — paginado, filtrável por
+  `usado` (`true`/`false`). Nunca devolve `valor`/`qrCode` — só os metadados.
+- `DELETE /enrollment/tokens/:id` (`TECNICO+`) — revoga antes do uso (`409` se o token
+  já foi usado pra provisionar um device).
+- `404` se `politicaId`/`colaboradorId` não existir; `422` se a política não tiver
+  `amapiName` (não deveria acontecer — toda política nasce com um); `502` se a AMAPI
+  recusar (inclusive por falta de credencial configurada, caso esperado até a
+  enterprise AMAPI real ser confirmada pela empresa).
+
 ## 6. O que ainda NÃO existe na API (não assuma que existe)
 
-- **Não há rota para criar token de enrollment** (o processo de "adicionar um
-  aparelho novo" via QR code). Hoje isso só existe como função interna
-  (`src/integrations/amapi/enrollment.ts`), sem rota HTTP exposta — é um gap conhecido
-  da spec original (`docs/SETUP.md` já registra isso). **Se a tela precisar de um fluxo
-  de "adicionar dispositivo", confirme com o time de backend antes de desenhar — a rota
-  não existe ainda.**
 - **Não há rota de exportação/relatório em CSV/Excel** — só os endpoints JSON
   paginados acima.
 - **Não há websocket/notificação em tempo real** — alertas e mudanças de status só

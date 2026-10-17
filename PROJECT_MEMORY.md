@@ -1371,3 +1371,79 @@ todo campo irmão já tinha). Commitado e pushado no repositório do painel.
    correção oficial do Vitest; se reaparecer, é hora de abrir uma issue própria ou
    fixar numa versão de patch mais nova.
 2. Pendências já listadas nas entradas anteriores inalteradas.
+
+---
+
+### 2026-10-16/17 — Fecha o gap de enrollment (`POST /enrollment/tokens`) + revisão do painel
+
+**Solicitação original:** Victor revisou o painel ao vivo e notou três coisas aparentemente
+faltando: botão de adicionar dispositivo, botão de adicionar alerta + classificação de
+severidade, botão de adicionar usuário. Pediu pra agir em cima de tudo que fosse
+achado/apontado, "pra que o projeto seja extremamente completo".
+
+**Status:** Concluída — 1 gap real fechado, 2 observações eram comportamento correto (não
+mexido), 1 polimento de UI aplicado.
+
+**Diagnóstico dos três pontos:**
+
+1. **"Dispositivos" sem botão de adicionar — gap real, fechado.** O backend nunca teve
+   `POST /enrollment/tokens` (seção 10 da spec original) — só existia a função de
+   integração (`src/integrations/amapi/enrollment.ts`) e o processamento do evento
+   `ENROLLMENT` (Fase 4), ambos prontos e testados, sem rota HTTP ligando os dois. Gap já
+   documentado em `docs/HANDOFF-FRONTEND.md`/`docs/SETUP.md` desde a Fase 5. Implementado
+   agora: módulo `src/modules/enrollment/enrollment.routes.ts` (`POST`/`GET`/`DELETE
+/enrollment/tokens`, RBAC `TECNICO+` pra escrever) + `src/domain/enrollment/repositorio.ts`
+   - tela `/devices/novo` no painel (escolhe política + patrimônio/colaborador opcionais,
+     mostra `valor`/`qrCode` uma única vez — nunca mais recuperável, mesma regra do refresh
+     token). 11 testes de integração novos (339/339 no total). `docs/api/enrollment.md`
+     criado, `docs/HANDOFF-FRONTEND.md`/`docs/SETUP.md`/`docs/ARQUITETURA.md` atualizados,
+     `openapi.json` regenerado (41 → 44 rotas).
+2. **"Alertas" sem botão de adicionar — não é gap, é intencional.** Alertas são 100%
+   gerados pelo motor automático (reativo ou periódico, ver `docs/ARQUITETURA.md`) — nunca
+   um dado autoral de usuário, então não existe (nem deveria existir) um `POST /alertas`
+   manual. Nada alterado aqui.
+3. **"Alertas" sem classificação de severidade — já existia, só não estava óbvio.**
+   Backend já tinha os 3 níveis (`ALTA`/`MEDIA`/`BAIXA`) em todos os 9 tipos desde a Fase
+   6, e o frontend já tinha filtro + coluna + badge colorido desde a sessão anterior — só
+   a confusão era visual: o badge mostrava o enum cru (`"ALTA"`) em vez de um rótulo
+   amigável. Corrigido: `ROTULOS_SEVERIDADE` em `src/app/alertas/page.tsx` (painel),
+   mostra "Alta"/"Média"/"Baixa" agora. (Obs. deixada de propósito sem mexer: o Dashboard
+   usa as mesmas chaves cruas nos gráficos de breakdown — `paraBreakdown()` é genérico pra
+   4 tipos de agregação diferentes; dar rótulo amigável ali also exigiria tocar os 4
+   call-sites, não só severidade — não fiz por não ter sido pedido e não ser tão confuso
+   num gráfico compacto quanto numa coluna de tabela.)
+4. **"Usuários" sem botão de adicionar — não é gap, é o modelo de segurança certo.**
+   Login é 100% via OIDC corporativo — não existe conceito de "criar usuário com senha"
+   neste sistema. Um usuário nasce automaticamente no primeiro login (provisionamento JIT,
+   sempre como `VIEWER`, exceto e-mails em `BOOTSTRAP_ADMIN_EMAILS`) — o único CRUD que faz
+   sentido é `PATCH` de role num usuário que já logou pelo menos uma vez, que já existe.
+   Nada alterado aqui.
+
+**Validação:** testado ao vivo no painel (não só nos testes automatizados) — form
+completo, incluindo o caminho de erro real (sem `AMAPI_SERVICE_ACCOUNT_KEY_PATH`
+configurado neste ambiente dev, a resposta é `502` com o `ENOENT` explícito, exatamente o
+comportamento esperado até a credencial real existir). Política de teste (`administrativo`)
+temporariamente ativada no Postgres local só pra esse teste manual, revertida pra `ativa =
+false` depois — não é uma mudança de dado permanente.
+
+**Arquivos alterados (backend):** `src/modules/enrollment/enrollment.routes.ts` (novo),
+`src/domain/enrollment/repositorio.ts` (novo), `src/app.ts` (registro do módulo),
+`test/integration/enrollment-routes.test.ts` (novo), `docs/api/enrollment.md` (novo),
+`docs/api/README.md`, `docs/HANDOFF-FRONTEND.md`, `docs/SETUP.md`, `docs/ARQUITETURA.md`,
+`docs/openapi.json`, este arquivo.
+
+**Arquivos alterados (painel, repositório separado):** `src/app/devices/novo/page.tsx`
+(novo), `src/app/devices/page.tsx` (botão "+ Adicionar dispositivo"), `src/lib/types.ts`
+(`EnrollmentToken`/`EnrollmentTokenCriado`), `src/app/alertas/page.tsx` (rótulo de
+severidade).
+
+**Pendências futuras:**
+
+1. `qrCode` devolvido pela rota é a string JSON pro QR, não uma imagem pronta — a tela
+   mostra o texto cru pra colar num gerador externo. Se quiser a imagem renderizada na
+   própria tela, precisa de uma lib cliente de QR (ex. `qrcode`), não adicionada ainda.
+2. Rótulo amigável nos breakdowns do Dashboard (hoje mostra chave crua) — cosmético, não
+   pedido, documentado como possível próximo passo.
+3. Teste de ponta a ponta de verdade contra a AMAPI segue bloqueado pela mesma pendência de
+   sempre (enterprise real, Pub/Sub, `AMAPI_SERVICE_ACCOUNT_KEY_PATH`) — a rota nova já foi
+   confirmada funcionando corretamente nesse caminho de erro esperado.

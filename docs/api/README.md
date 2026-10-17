@@ -16,6 +16,7 @@ precisar ler o código. Contrato exato de request/response (schemas Zod → Open
 | [`colaboradores-e-linhas.md`](./colaboradores-e-linhas.md) | `/colaboradores`, `/linhas` — CRUD de contexto organizacional                                                               |
 | [`alertas.md`](./alertas.md)                               | `/alertas` — os 9 tipos, reativos vs. periódicos, ciclo de vida (reconhecer/resolver)                                       |
 | [`dashboard.md`](./dashboard.md)                           | `GET /dashboard` — resumo agregado da frota                                                                                 |
+| [`enrollment.md`](./enrollment.md)                         | `/enrollment/tokens` — gerar/listar/revogar token de enrollment (QR code) pra adicionar um dispositivo novo                 |
 
 Cada fase nova adiciona os tópicos que introduziu — não é um documento por rota, é um documento por
 **assunto** (às vezes várias rotas relacionadas, como em `devices.md`).
