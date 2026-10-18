@@ -782,10 +782,41 @@ na tabela inteira:
 leitura mais rápida. A purga de `refresh_tokens` antigos **não** entrou neste ADR: apagar
 tokens quebraria a cadeia `substituido_por` ("percorrível pra auditoria — esse token foi
 rotacionado N vezes desde o login", comentário em `src/db/schema/refresh-tokens.ts`), que é
-um objetivo de produto documentado, não um acidente — decisão de retenção fica pendente de
-alinhamento com o Victor, não foi tomada unilateralmente aqui.
+um objetivo de produto documentado, não um acidente — resolvido separadamente no ADR-034.
 
-**Consequência:** sem mudança de contrato de API nem de comportamento — só os 3 `CREATE
+**Consequência:** sem mudança de contrato de API nem de comportamento — só os 4 `CREATE
 INDEX`. Suíte completa re-rodada após a migration pra confirmar que nada depende de plano de
 execução (nenhum teste deveria, mas é o mesmo rigor de qualquer mudança de schema nesta
 sessão).
+
+## ADR-034 — Retenção de `refresh_tokens`: purga após 30 dias de expirado, FK vira `SET NULL`
+
+**Contexto:** ADR-033 achou que `refresh_tokens` nunca tinha purga (diferente de
+`eventos_brutos`, que já purga via `RETENCAO_EVENTOS_BRUTOS_DIAS`) e deixou a decisão de
+retenção pendente, porque apagar tokens sem cuidado quebra a FK auto-referente
+`substituido_por` — um token antigo pode ainda ser apontado por outro, mais antigo, como "o
+que me substituiu".
+
+**Decisão:**
+
+1. `substituido_por` ganha `onDelete: 'set null'` (`drizzle/migrations/
+0006_refresh_tokens_fk_set_null.sql`) — apagar um token nunca mais quebra com erro de FK;
+   na pior hipótese, a cadeia perde o elo mais antigo e o próximo passa a apontar pra `null`
+   em vez de continuar a história pra trás daquele ponto.
+2. Novo `purgarRefreshTokensAntigos()` (`src/domain/lgpd/retencao.ts`), mesmo padrão de
+   `purgarEventosBrutosAntigos` — apaga tokens com `expira_em` mais antigo que
+   `RETENCAO_REFRESH_TOKENS_DIAS` (nova env var, default **30 dias**), rodando junto no
+   worker de manutenção a cada ciclo (`ALERTA_SCAN_INTERVALO_HORAS`).
+3. Filtra por `expira_em`, não por `revogado_em` — cobre tanto token revogado quanto sessão
+   simplesmente abandonada (usuário nunca mais voltou a renovar).
+
+**Por que 30 dias:** margem bem maior que qualquer investigação de segurança plausível
+precisaria (um token expirado não é mais utilizável pra autenticar nada — reter mais tempo
+não adiciona proteção, só armazenamento), e consistente com o espírito de minimização de
+dados do restante do projeto (`RETENCAO_LOCALIZACAO_DIAS`, `RETENCAO_EVENTOS_BRUTOS_DIAS`).
+
+**Consequência:** a cadeia de rotação deixa de ser permanente — só os últimos ~30 dias após
+expirar ficam retidos, não para sempre. Isso é uma mudança de comportamento real (ao
+contrário do ADR-033), por isso ADR separado. Testado em `test/integration/
+motor-alertas.test.ts`, incluindo o caso de uma cadeia de 2 elos expirados sendo apagada
+junto sem violar a FK.

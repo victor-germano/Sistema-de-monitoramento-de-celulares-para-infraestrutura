@@ -4,12 +4,12 @@
 //   1. Os 3 alertas periódicos (SEM_CHECKIN, DISPOSITIVO_ORFAO,
 //      LINHA_SEM_USO) — sobre AUSÊNCIA de algo, só um scan da frota inteira
 //      detecta.
-//   2. Purga LGPD de `eventos_brutos` antigos.
+//   2. Purga LGPD de `eventos_brutos` e `refresh_tokens` antigos.
 // Timer simples (`setInterval`), mesmo padrão de `src/workers/watchdog.ts`
 // — não BullMQ repeatable job, porque isso é fundamentalmente uma rotina em
 // lote (uma vez a cada N horas), não uma fila de trabalho sob demanda.
 import { executarScanPeriodico } from '../domain/alertas/motor.ts';
-import { purgarEventosBrutosAntigos } from '../domain/lgpd/retencao.ts';
+import { purgarEventosBrutosAntigos, purgarRefreshTokensAntigos } from '../domain/lgpd/retencao.ts';
 import { env } from '../config/env.ts';
 import { logger } from '../shared/logger.ts';
 import { ehExecutadoDiretamente } from '../shared/entrypoint.ts';
@@ -24,9 +24,16 @@ export async function executarRodadaDeManutencao(): Promise<void> {
 
   try {
     const eventosPurgados = await purgarEventosBrutosAntigos();
-    logger.info({ eventosPurgados }, 'manutenção: purga LGPD concluída');
+    logger.info({ eventosPurgados }, 'manutenção: purga LGPD de eventos_brutos concluída');
   } catch (erro) {
-    logger.error({ err: erro }, 'manutenção: falha na purga LGPD');
+    logger.error({ err: erro }, 'manutenção: falha na purga LGPD de eventos_brutos');
+  }
+
+  try {
+    const refreshTokensPurgados = await purgarRefreshTokensAntigos();
+    logger.info({ refreshTokensPurgados }, 'manutenção: purga LGPD de refresh_tokens concluída');
+  } catch (erro) {
+    logger.error({ err: erro }, 'manutenção: falha na purga LGPD de refresh_tokens');
   }
 }
 

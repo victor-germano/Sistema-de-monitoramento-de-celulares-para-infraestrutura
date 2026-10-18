@@ -135,6 +135,9 @@ Até isso ser implementado, o jeito de saber que o sistema está saudável é:
   (ADR-008) — um backup regular do banco inteiro continua necessário.
 - **Retenção de `eventos_brutos`:** purgado automaticamente pelo worker de manutenção
   após `RETENCAO_EVENTOS_BRUTOS_DIAS` (padrão 180 dias) — ver `docs/LGPD.md`.
+- **Retenção de `refresh_tokens`:** purgado automaticamente pelo worker de manutenção
+  após `RETENCAO_REFRESH_TOKENS_DIAS` (padrão 30 dias, contados a partir de quando o token
+  expirou, não de quando foi criado) — ver ADR-034 em `docs/DECISOES.md`.
 
 ## Encerramento gracioso
 

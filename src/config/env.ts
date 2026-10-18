@@ -109,6 +109,11 @@ export const envSchema = z.object({
   // variável ainda, e declará-la como obrigatória sem uso violaria a regra
   // do topo deste arquivo.
   RETENCAO_EVENTOS_BRUTOS_DIAS: z.coerce.number().int().positive().default(180),
+  // Achado numa auditoria de performance (sessão de 17/10): diferente de
+  // `eventos_brutos`, `refresh_tokens` nunca tinha purga — só cresce. 30 dias
+  // após expirar é bastante margem pra qualquer investigação de segurança
+  // precisar do histórico recente, sem reter sessão expirada indefinidamente.
+  RETENCAO_REFRESH_TOKENS_DIAS: z.coerce.number().int().positive().default(30),
 });
 
 function splitList(value: string): string[] {

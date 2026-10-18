@@ -19,7 +19,14 @@ export const refreshTokens = pgTable(
     // Auto-referência: aponta pro token novo criado na rotação. Cadeia
     // percorrível pra auditoria ("esse token foi rotacionado 4 vezes desde o
     // login"); não é usada pra validar nada em runtime, só histórico.
-    substituidoPor: uuid('substituido_por').references((): AnyPgColumn => refreshTokens.id),
+    // `onDelete: 'set null'` existe por causa de `purgarRefreshTokensAntigos`
+    // (src/domain/lgpd/retencao.ts): sem isso, apagar um token antigo que
+    // ainda é apontado por outro (mais antigo, já purgado numa rodada
+    // anterior) violaria a FK — com SET NULL, a cadeia só perde a ponta mais
+    // antiga aos poucos, nunca quebra em erro.
+    substituidoPor: uuid('substituido_por').references((): AnyPgColumn => refreshTokens.id, {
+      onDelete: 'set null',
+    }),
     ip: text('ip'),
     userAgent: text('user_agent'),
   },

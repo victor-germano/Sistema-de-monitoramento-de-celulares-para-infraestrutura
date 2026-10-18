@@ -2,7 +2,8 @@
 // (chamados via `verificarAlertasReativos`, mesma função que
 // `processarStatusReport` usa — testado direto contra um `Dispositivo` já
 // montado, sem precisar repetir o round-trip do mapper AMAPI) e os 3
-// periódicos (scan da frota inteira). Mais a purga LGPD de `eventos_brutos`.
+// periódicos (scan da frota inteira). Mais a purga LGPD de `eventos_brutos`
+// e `refresh_tokens`.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { and, eq } from 'drizzle-orm';
@@ -11,6 +12,8 @@ import type * as DispositivosSchemaModule from '../../src/db/schema/dispositivos
 import type * as AlertasSchemaModule from '../../src/db/schema/alertas.ts';
 import type * as LinhasSchemaModule from '../../src/db/schema/linhas.ts';
 import type * as EventosBrutosSchemaModule from '../../src/db/schema/eventos-brutos.ts';
+import type * as RefreshTokensSchemaModule from '../../src/db/schema/refresh-tokens.ts';
+import type * as UsuariosSchemaModule from '../../src/db/schema/usuarios.ts';
 import type * as MotorModule from '../../src/domain/alertas/motor.ts';
 import type * as DispositivosRepoModule from '../../src/domain/dispositivos/repositorio.ts';
 import type * as LgpdModule from '../../src/domain/lgpd/retencao.ts';
@@ -21,12 +24,15 @@ let dispositivos: typeof DispositivosSchemaModule.dispositivos;
 let alertas: typeof AlertasSchemaModule.alertas;
 let linhas: typeof LinhasSchemaModule.linhas;
 let eventosBrutos: typeof EventosBrutosSchemaModule.eventosBrutos;
+let refreshTokens: typeof RefreshTokensSchemaModule.refreshTokens;
+let usuarios: typeof UsuariosSchemaModule.usuarios;
 let verificarAlertasReativos: typeof MotorModule.verificarAlertasReativos;
 let verificarDispositivosSemCheckin: typeof MotorModule.verificarDispositivosSemCheckin;
 let verificarDispositivosOrfaos: typeof MotorModule.verificarDispositivosOrfaos;
 let verificarLinhasSemUso: typeof MotorModule.verificarLinhasSemUso;
 let criarDispositivo: typeof DispositivosRepoModule.criarDispositivo;
 let purgarEventosBrutosAntigos: typeof LgpdModule.purgarEventosBrutosAntigos;
+let purgarRefreshTokensAntigos: typeof LgpdModule.purgarRefreshTokensAntigos;
 
 function diasAtras(n: number): Date {
   return new Date(Date.now() - n * 24 * 60 * 60 * 1000);
@@ -48,6 +54,8 @@ beforeAll(async () => {
   ({ alertas } = await import('../../src/db/schema/alertas.ts'));
   ({ linhas } = await import('../../src/db/schema/linhas.ts'));
   ({ eventosBrutos } = await import('../../src/db/schema/eventos-brutos.ts'));
+  ({ refreshTokens } = await import('../../src/db/schema/refresh-tokens.ts'));
+  ({ usuarios } = await import('../../src/db/schema/usuarios.ts'));
   ({
     verificarAlertasReativos,
     verificarDispositivosSemCheckin,
@@ -55,7 +63,8 @@ beforeAll(async () => {
     verificarLinhasSemUso,
   } = await import('../../src/domain/alertas/motor.ts'));
   ({ criarDispositivo } = await import('../../src/domain/dispositivos/repositorio.ts'));
-  ({ purgarEventosBrutosAntigos } = await import('../../src/domain/lgpd/retencao.ts'));
+  ({ purgarEventosBrutosAntigos, purgarRefreshTokensAntigos } =
+    await import('../../src/domain/lgpd/retencao.ts'));
 
   await migrate(db, { migrationsFolder: './drizzle/migrations' });
 }, 60_000);
@@ -69,6 +78,8 @@ beforeEach(async () => {
   await db.delete(dispositivos);
   await db.delete(linhas);
   await db.delete(eventosBrutos);
+  await db.delete(refreshTokens);
+  await db.delete(usuarios);
 });
 
 async function semearDispositivo(overrides: Partial<typeof dispositivos.$inferInsert> = {}) {
@@ -292,5 +303,99 @@ describe('purgarEventosBrutosAntigos (LGPD)', () => {
       'antigo-com-erro',
       'recente-processado',
     ]);
+  });
+});
+
+describe('purgarRefreshTokensAntigos (LGPD)', () => {
+  async function semearUsuario() {
+    const [usuario] = await db
+      .insert(usuarios)
+      .values({
+        oidcSubject: `oidc-teste-${Math.random()}`,
+        email: `teste-${Math.random()}@gruporoveri.com.br`,
+        nome: 'Usuário de teste',
+      })
+      .returning();
+    if (!usuario) throw new Error('falha ao semear usuário');
+    return usuario;
+  }
+
+  it('purga só tokens expirados há mais que o limite (default 30 dias), mantém os recentes', async () => {
+    const usuario = await semearUsuario();
+
+    await db.insert(refreshTokens).values([
+      {
+        usuarioId: usuario.id,
+        tokenHash: 'hash-antigo-expirado',
+        expiraEm: diasAtras(40),
+      },
+      {
+        usuarioId: usuario.id,
+        tokenHash: 'hash-recente-expirado',
+        expiraEm: diasAtras(5),
+      },
+      {
+        usuarioId: usuario.id,
+        tokenHash: 'hash-ainda-valido',
+        expiraEm: new Date(Date.now() + 1000 * 60 * 60),
+      },
+    ]);
+
+    const quantidade = await purgarRefreshTokensAntigos();
+    expect(quantidade).toBe(1);
+
+    const restantes = await db.select({ tokenHash: refreshTokens.tokenHash }).from(refreshTokens);
+    expect(restantes.map((r) => r.tokenHash).sort()).toEqual([
+      'hash-ainda-valido',
+      'hash-recente-expirado',
+    ]);
+  });
+
+  it('apaga uma cadeia inteira de rotação já expirada, sem violar a FK de substituido_por', async () => {
+    const usuario = await semearUsuario();
+
+    const [elo1] = await db
+      .insert(refreshTokens)
+      .values({ usuarioId: usuario.id, tokenHash: 'elo-1-mais-antigo', expiraEm: diasAtras(90) })
+      .returning();
+    if (!elo1) throw new Error('setup falhou');
+
+    const [elo2] = await db
+      .insert(refreshTokens)
+      .values({
+        usuarioId: usuario.id,
+        tokenHash: 'elo-2-meio',
+        expiraEm: diasAtras(60),
+      })
+      .returning();
+    if (!elo2) throw new Error('setup falhou');
+
+    const [elo3] = await db
+      .insert(refreshTokens)
+      .values({
+        usuarioId: usuario.id,
+        tokenHash: 'elo-3-ainda-valido',
+        expiraEm: new Date(Date.now() + 1000 * 60 * 60),
+      })
+      .returning();
+    if (!elo3) throw new Error('setup falhou');
+
+    await db
+      .update(refreshTokens)
+      .set({ substituidoPor: elo2.id })
+      .where(eq(refreshTokens.id, elo1.id));
+    await db
+      .update(refreshTokens)
+      .set({ substituidoPor: elo3.id })
+      .where(eq(refreshTokens.id, elo2.id));
+
+    // elo1 e elo2 (ambos expirados há mais de 30 dias) devem sumir juntos
+    // sem erro de FK — é exatamente o cenário que `onDelete: 'set null'`
+    // existe para cobrir. elo3 (ainda válido) sobrevive.
+    const quantidade = await purgarRefreshTokensAntigos();
+    expect(quantidade).toBe(2);
+
+    const restantes = await db.select({ tokenHash: refreshTokens.tokenHash }).from(refreshTokens);
+    expect(restantes.map((r) => r.tokenHash)).toEqual(['elo-3-ainda-valido']);
   });
 });
