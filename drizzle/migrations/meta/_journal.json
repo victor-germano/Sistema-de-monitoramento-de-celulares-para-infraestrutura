@@ -36,6 +36,13 @@
       "when": 1788905775173,
       "tag": "0004_alertas_linha_sem_uso",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792360243239,
+      "tag": "0005_indices_performance",
+      "breakpoints": true
     }
   ]
 }

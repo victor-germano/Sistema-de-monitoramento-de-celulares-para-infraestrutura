@@ -1,4 +1,4 @@
-import { jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { uuidPk } from './_shared.ts';
 import { dispositivos } from './dispositivos.ts';
 import { usuarios } from './usuarios.ts';
@@ -23,19 +23,28 @@ export const comandoStatusEnum = pgEnum('comando_status', [
   'FALHA',
 ]);
 
-export const comandos = pgTable('comandos', {
-  id: uuidPk(),
-  dispositivoId: uuid('dispositivo_id')
-    .notNull()
-    .references(() => dispositivos.id),
-  tipo: comandoTipoEnum('tipo').notNull(),
-  payload: jsonb('payload'),
-  amapiOperationName: text('amapi_operation_name'),
-  status: comandoStatusEnum('status').notNull().default('PENDENTE'),
-  erro: text('erro'),
-  solicitadoPor: uuid('solicitado_por')
-    .notNull()
-    .references(() => usuarios.id),
-  solicitadoEm: timestamp('solicitado_em', { withTimezone: true }).notNull().defaultNow(),
-  concluidoEm: timestamp('concluido_em', { withTimezone: true }),
-});
+export const comandos = pgTable(
+  'comandos',
+  {
+    id: uuidPk(),
+    dispositivoId: uuid('dispositivo_id')
+      .notNull()
+      .references(() => dispositivos.id),
+    tipo: comandoTipoEnum('tipo').notNull(),
+    payload: jsonb('payload'),
+    amapiOperationName: text('amapi_operation_name'),
+    status: comandoStatusEnum('status').notNull().default('PENDENTE'),
+    erro: text('erro'),
+    solicitadoPor: uuid('solicitado_por')
+      .notNull()
+      .references(() => usuarios.id),
+    solicitadoEm: timestamp('solicitado_em', { withTimezone: true }).notNull().defaultNow(),
+    concluidoEm: timestamp('concluido_em', { withTimezone: true }),
+  },
+  (t) => [
+    // Achado numa auditoria de performance: `GET /devices/:id/comandos`
+    // (aba "Comandos" da tela de detalhe, visitada toda vez que alguém abre
+    // um dispositivo) filtrava por esta coluna sem índice nenhum na tabela.
+    index('comandos_dispositivo_id_idx').on(t.dispositivoId),
+  ],
+);

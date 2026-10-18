@@ -755,3 +755,37 @@ o único ADMIN ativo, mesma chamada a `contarAdminsAtivos()`. `atualizarRole` vi
 a rota de gestão ganhou a capacidade que faltava. Auditoria registra `USUARIO_ATIVO_ALTERADO`
 separado de `USUARIO_ROLE_ALTERADA` (a UI do painel só manda um campo por vez, nunca os
 dois). Testado em `test/integration/rbac.test.ts`.
+
+## ADR-033 — Índices faltando em 4 colunas de filtro frequente
+
+**Contexto:** auditoria de performance (sessão de 17/10) comparou toda coluna usada em
+`WHERE`/`eq()` nos repositórios de domínio contra os índices declarados em `src/db/schema/*.ts`.
+Achou 4 colunas filtradas com frequência sem índice nenhum, cada uma causando sequential scan
+na tabela inteira:
+
+- `refresh_tokens.token_hash` — a mais crítica das três: é o lookup de **todo** `POST
+/auth/refresh` (`src/domain/auth/refresh-tokens.ts:163`), que roda a cada renovação de
+  sessão de cada usuário ativo. A tabela também não tem nenhuma purga de tokens
+  expirados/revogados (diferente de `eventos_brutos`, que já tem `purgarEventosBrutosAntigos`
+  rodando no worker de manutenção) — só cresce.
+- `comandos.dispositivo_id` — filtro de `GET /devices/:id/comandos`
+  (`src/domain/comandos/repositorio.ts:17`), a aba "Comandos" visitada toda vez que alguém
+  abre a tela de detalhe de um dispositivo no painel.
+- `dispositivos.politica_id` — filtro de `GET /devices?politicaId=`
+  (`src/domain/dispositivos/repositorio.ts:223`).
+- `politicas_versoes.politica_id` — filtro de `GET /policies/:id/versoes` e do lookup de
+  `POST /policies/:id/rollback` (`src/modules/politicas/politicas.routes.ts:297,521`), numa
+  tabela append-only (nunca tem UPDATE/DELETE, só cresce a cada edição de política).
+
+**Decisão:** 4 índices B-tree simples adicionados via `drizzle-kit generate`
+(`drizzle/migrations/0005_indices_performance.sql`) — nenhuma mudança de comportamento, só
+leitura mais rápida. A purga de `refresh_tokens` antigos **não** entrou neste ADR: apagar
+tokens quebraria a cadeia `substituido_por` ("percorrível pra auditoria — esse token foi
+rotacionado N vezes desde o login", comentário em `src/db/schema/refresh-tokens.ts`), que é
+um objetivo de produto documentado, não um acidente — decisão de retenção fica pendente de
+alinhamento com o Victor, não foi tomada unilateralmente aqui.
+
+**Consequência:** sem mudança de contrato de API nem de comportamento — só os 3 `CREATE
+INDEX`. Suíte completa re-rodada após a migration pra confirmar que nada depende de plano de
+execução (nenhum teste deveria, mas é o mesmo rigor de qualquer mudança de schema nesta
+sessão).

@@ -1,4 +1,13 @@
-import { boolean, integer, jsonb, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { criadoEm, uuidPk } from './_shared.ts';
 import { usuarios } from './usuarios.ts';
 
@@ -27,14 +36,23 @@ export const politicas = pgTable(
 // (seção 6/7) cria uma linha NOVA com o payload antigo — nunca apaga
 // histórico nem edita uma versão já gravada. O `payload` restaurado passa
 // por `enforceInvariants` de novo antes de subir, igual qualquer outro.
-export const politicasVersoes = pgTable('politicas_versoes', {
-  id: uuidPk(),
-  politicaId: uuid('politica_id')
-    .notNull()
-    .references(() => politicas.id),
-  versao: integer('versao').notNull(),
-  payload: jsonb('payload').notNull(),
-  diffResumo: text('diff_resumo'),
-  criadoPor: uuid('criado_por').references(() => usuarios.id),
-  criadoEm: criadoEm(),
-});
+export const politicasVersoes = pgTable(
+  'politicas_versoes',
+  {
+    id: uuidPk(),
+    politicaId: uuid('politica_id')
+      .notNull()
+      .references(() => politicas.id),
+    versao: integer('versao').notNull(),
+    payload: jsonb('payload').notNull(),
+    diffResumo: text('diff_resumo'),
+    criadoPor: uuid('criado_por').references(() => usuarios.id),
+    criadoEm: criadoEm(),
+  },
+  (t) => [
+    // Achado numa auditoria de performance: `GET /policies/:id/versoes` e o
+    // lookup de `POST /policies/:id/rollback` filtram por esta coluna numa
+    // tabela append-only (só cresce, nunca tem UPDATE/DELETE) sem índice.
+    index('politicas_versoes_politica_id_idx').on(t.politicaId),
+  ],
+);

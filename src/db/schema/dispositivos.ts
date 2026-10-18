@@ -67,6 +67,10 @@ export const dispositivos = pgTable(
     index('dispositivos_ultimo_checkin_idx').on(t.ultimoCheckin.desc()),
     index('dispositivos_colaborador_id_idx').on(t.colaboradorId),
     index('dispositivos_compliance_state_idx').on(t.complianceState),
+    // Achado numa auditoria de performance: `GET /devices?politicaId=` filtra
+    // por esta coluna (listarDispositivos) sem índice — sequential scan na
+    // tabela inteira a cada filtro por política.
+    index('dispositivos_politica_id_idx').on(t.politicaId),
   ],
 );
 
