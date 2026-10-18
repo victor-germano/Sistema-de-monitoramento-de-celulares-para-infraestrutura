@@ -241,6 +241,31 @@ describe('PATCH /devices/:id', () => {
     );
   });
 
+  // Achado testando a edição manualmente no painel: a resposta do PATCH
+  // vinha sem `colaboradorNome` (só o `UPDATE ... RETURNING` bruto, sem o
+  // `leftJoin` que `buscarDispositivoPorId` já faz) — o frontend que reusa
+  // essa resposta pra atualizar a tela sem um GET extra mostrava "—" mesmo
+  // com o vínculo salvo certo no banco.
+  it('a resposta do PATCH já vem com colaboradorNome, sem precisar de GET separado', async () => {
+    const { colaboradores } = await import('../../src/db/schema/colaboradores.ts');
+    const [colaborador] = await db
+      .insert(colaboradores)
+      .values({ matricula: 'MAT-PATCH', nome: 'Colaborador do PATCH' })
+      .returning();
+    if (!colaborador) throw new Error('falha ao semear colaborador');
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/devices/${dispositivoId}`,
+      headers: authHeader('ADMIN'),
+      payload: { colaboradorId: colaborador.id },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ colaboradorNome: string | null }>().colaboradorNome).toBe(
+      'Colaborador do PATCH',
+    );
+  });
+
   // Achado numa revisão: sem checar antes, isso batia direto no índice
   // único de `patrimonio` e quebrava com 500 genérico, em vez do 409
   // amigável que o mesmo padrão já usa pra matrícula/número.

@@ -96,17 +96,24 @@ export interface VinculoDispositivo {
   ativo?: boolean;
 }
 
-/** Usado por `PATCH /devices/:id` (seção 10, Fase 4) — só os 4 campos que a rota expõe. */
+/**
+ * Usado por `PATCH /devices/:id` (seção 10, Fase 4) — só os 4 campos que a
+ * rota expõe. Devolve `colaboradorNome` junto (mesmo `leftJoin` de
+ * `buscarDispositivoPorId`) — achado testando a edição manualmente: sem
+ * isso, o frontend que reusa a resposta do PATCH pra atualizar a tela
+ * perdia o nome do colaborador mesmo com o vínculo salvo corretamente.
+ */
 export async function atualizarVinculoDispositivo(
   id: string,
   vinculo: VinculoDispositivo,
-): Promise<Dispositivo | undefined> {
+): Promise<ItemListaDispositivo | undefined> {
   const [dispositivo] = await db
     .update(dispositivos)
     .set({ ...vinculo, atualizadoEm: new Date() })
     .where(eq(dispositivos.id, id))
     .returning();
-  return dispositivo;
+  if (!dispositivo) return undefined;
+  return buscarDispositivoPorId(dispositivo.id);
 }
 
 /**
