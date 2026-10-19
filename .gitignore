@@ -12,6 +12,12 @@ dist/
 *.json.key
 service-account*.json
 
+# scripts descartáveis de depuração local (ex.: seed de sessão de teste,
+# sempre com `_` na frente por convenção) — rede de segurança extra contra
+# um `git add -A` acidental incluir algo que minta token/credencial de
+# teste, mesmo que a disciplina de nunca dar `git add` neles já exista.
+scripts/_*.ts
+
 # testes / cobertura
 coverage/
 
