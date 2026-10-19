@@ -55,20 +55,31 @@ export async function buildApp(): Promise<FastifyInstance> {
   // (`config.rateLimit`, seção 11) — os dois se aplicam juntos ali.
   await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
-  await app.register(swagger, {
-    openapi: {
-      openapi: '3.1.0',
-      info: {
-        title: 'Sistema de Monitoramento de Celulares — API interna',
-        description:
-          'Backend de gestão de dispositivos móveis corporativos (EMM/MDM) sobre a Android Management API.',
-        version: '0.1.0',
+  // Achado numa auditoria de segurança (sessão de 18/10): `/docs`/`/docs/json`
+  // não tinham `withRole` nenhum (nem têm como — são rotas registradas pelo
+  // próprio plugin de terceiro, fora do nosso fluxo `register*Routes`) e
+  // expunham o mapa completo da API, incluindo rotas internas
+  // (`/internal/pubsub/replay` etc.), pra qualquer um sem autenticação. Em
+  // produção isso é só superfície de ataque de graça — quem precisa do
+  // contrato (frontend, infra) já tem `docs/openapi.json`, commitado e
+  // mantido em sincronia por CI (`openapi.json reflete as rotas atuais`).
+  // Mesmo padrão condicional já usado pro transport `pino-pretty` do logger.
+  if (env.NODE_ENV !== 'production') {
+    await app.register(swagger, {
+      openapi: {
+        openapi: '3.1.0',
+        info: {
+          title: 'Sistema de Monitoramento de Celulares — API interna',
+          description:
+            'Backend de gestão de dispositivos móveis corporativos (EMM/MDM) sobre a Android Management API.',
+          version: '0.1.0',
+        },
+        servers: [{ url: '/api/v1' }],
       },
-      servers: [{ url: '/api/v1' }],
-    },
-    transform: jsonSchemaTransform,
-  });
-  await app.register(swaggerUi, { routePrefix: '/docs' });
+      transform: jsonSchemaTransform,
+    });
+    await app.register(swaggerUi, { routePrefix: '/docs' });
+  }
 
   // Ordem importa a partir daqui: `rbacPlugin` registra o hook `onRoute`
   // que alimenta `routeAccessRegistry` — só pega rotas registradas DEPOIS

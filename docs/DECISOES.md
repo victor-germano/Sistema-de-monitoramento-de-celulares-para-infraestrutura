@@ -820,3 +820,62 @@ expirar ficam retidos, não para sempre. Isso é uma mudança de comportamento r
 contrário do ADR-033), por isso ADR separado. Testado em `test/integration/
 motor-alertas.test.ts`, incluindo o caso de uma cadeia de 2 elos expirados sendo apagada
 junto sem violar a FK.
+
+## ADR-035 — Auditoria de segurança (red/blue team) antes do handoff: 2 achados corrigidos
+
+**Contexto:** antes de transferir os dois repositórios pro time de dev/infra da empresa,
+sessão de 18/10 fez uma bateria de testes reais de ataque contra o servidor local (não só
+revisão de código) — bypass de autenticação, `alg: none` em JWT, escalação de privilégio com
+token legítimo de papel baixo, injeção de SQL nos filtros de busca, path traversal,
+exposição de CORS, headers de segurança, `npm audit` nos dois repositórios.
+
+**O que já estava correto (confirmado, não só assumido) e não mudou:**
+
+- `jose` com `algorithms: ['HS256']` fixo na verificação — tentativa de forjar JWT com
+  `alg: none` recusada com 401, não aceita silenciosamente.
+- RBAC: token legítimo de `VIEWER` barrado com 403 em toda rota de escrita testada
+  (`PATCH /usuarios/:id`, `POST /devices/:id/comandos` com `WIPE`, `POST /policies`,
+  `POST /internal/sync/devices`).
+- Filtros de busca (`ilike`) tratam payload de SQL injection como string literal — Drizzle
+  parametriza a query, `escaparTermoBusca` escapa wildcard de propósito; nenhum erro de SQL,
+  nenhum vazamento.
+- `params.id` com payload de path traversal/injection é rejeitado com 400 pelo Zod antes de
+  qualquer query no banco (`Invalid uuid`).
+- `@fastify/helmet` já registrado: CSP, HSTS, X-Content-Type-Options, X-Frame-Options,
+  X-DNS-Prefetch-Control todos presentes.
+- CORS: origem fora de `ALLOWED_ORIGINS` nunca recebe `Access-Control-Allow-Origin` — browser
+  bloqueia a leitura da resposta mesmo com `credentials: true` setado.
+- Fluxo OIDC (`src/domain/auth/oidc-state.ts`): `state` é um JWT assinado (não um valor
+  arbitrário confiado cegamente), carrega `code_verifier`/`nonce` (PKCE), `issuer` próprio
+  (`...oidc-state`, diferente do token de sessão — os dois nunca são intercambiáveis mesmo
+  compartilhando o mesmo `JWT_SECRET`). Redirect final sempre pra `env.FRONTEND_URL`
+  (configurado pelo servidor) — nunca um parâmetro vindo do cliente, zero risco de open
+  redirect.
+- Cookie `mdm_refresh_token`: `httpOnly`, `secure` (produção), `sameSite: 'lax'`.
+
+**Achado 1 — `/docs`/`/docs/json` (Swagger UI) expostos sem autenticação:** qualquer um,
+sem token, via a URL pública do backend, veria o mapa completo da API — inclusive rotas
+internas (`/internal/pubsub/replay`). Não dava pra proteger com `withRole` (rota registrada
+pelo plugin `@fastify/swagger-ui`, fora do fluxo `register*Routes`). **Decisão:** registra
+`@fastify/swagger`/`@fastify/swagger-ui` só quando `NODE_ENV !== 'production'`
+(`src/app.ts`) — mesmo padrão condicional já usado pro transport `pino-pretty` do logger.
+Quem precisa do contrato em produção usa `docs/openapi.json` (committed, mantido em
+sincronia por CI). Provado ao vivo: `GET /docs` com `NODE_ENV=production` → 404.
+
+**Achado 2 — `uuid < 11.1.1` (CVE moderada, GHSA-w5hq-g745-h8pq) via `exceljs`:**
+`npm audit` acusou, mas a função vulnerável (`v3`/`v5`/`v6` com buffer) nunca é chamada —
+`exceljs` só usa `uuid.v4()` (confirmado via `grep` no pacote instalado), não afetado pela
+CVE. Não explorável na prática, mas corrigido mesmo assim (zero custo, zero risco de quebra):
+`"overrides": { "exceljs": { "uuid": "^11.1.1" } }` no `package.json`. `npm audit --omit=dev`
+(só o que de fato entra na imagem Docker) confirma **0 vulnerabilidades** nos dois
+repositórios depois da correção.
+
+**Fora de escopo, aceito como está:** as ~11 vulnerabilidades restantes do `npm audit` em
+cada repositório são todas de devDependencies (`testcontainers`, `drizzle-kit`/`esbuild` no
+backend; `eslint-config-next` no frontend) — nunca entram na imagem de produção
+(`npm ci --omit=dev` no `Dockerfile`, confirmado). Corrigir exigiria downgrade/upgrade com
+breaking change em ferramenta de teste/lint, sem ganho de segurança real em produção —
+não forçado sem necessidade.
+
+**Consequência:** suíte completa (346 testes) re-rodada depois da mudança em `app.ts`,
+mesmo rigor de qualquer alteração nesta sessão.
