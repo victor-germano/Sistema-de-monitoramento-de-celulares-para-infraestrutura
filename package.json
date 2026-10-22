@@ -59,7 +59,7 @@
     "fastify-plugin": "^6.0.1",
     "fastify-type-provider-zod": "^4.0.2",
     "googleapis": "^178.0.0",
-    "ioredis": "^5.4.2",
+    "ioredis": "^6.0.0",
     "jose": "^6.2.12",
     "openid-client": "^6.8.8",
     "pino": "^9.6.0",
